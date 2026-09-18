@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Súlytalan szoba — Quest 3</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --ink: #eef2f7;
+    --muted: #9aa7b8;
+    --line: #232a35;
+    --glow: #57e2c4;
+    --glow-2: #ff8a5b;
+  }
+  :root:not([data-theme="light"]) { color-scheme: dark; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e1116; --ink: #eef2f7; --muted: #9aa7b8; --line: #232a35;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0e1116; --ink: #eef2f7; --muted: #9aa7b8; --line: #232a35;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  canvas { display: block; }
+  #ui {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    padding: clamp(20px, 5vw, 56px);
+    gap: 18px;
+    pointer-events: none;
+    background: linear-gradient(to top, rgba(14,17,22,.96) 30%, rgba(14,17,22,.4) 70%, transparent);
+  }
+  #ui > * { pointer-events: auto; max-width: 46ch; }
+  h1 {
+    margin: 0;
+    font-size: clamp(30px, 8vw, 52px);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.02;
+  }
+  p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 15px; }
+  #status { font-size: 14px; color: var(--glow); min-height: 1.4em; }
+  button {
+    font: inherit; font-weight: 600; font-size: 17px;
+    color: #06231d;
+    background: var(--glow);
+    border: 0; border-radius: 999px;
+    padding: 15px 30px;
+    cursor: pointer;
+    align-self: flex-start;
+    transition: transform .12s ease, background .12s ease;
+  }
+  button:hover { background: #6df0d4; }
+  button:active { transform: scale(.97); }
+  button:disabled { background: var(--line); color: var(--muted); cursor: default; }
+  button:focus-visible { outline: 3px solid var(--glow-2); outline-offset: 3px; }
+  ul { margin: 0; padding-left: 1.1em; color: var(--muted); font-size: 14px; line-height: 1.8; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<div id="ui">
+  <h1>Súlytalan szoba</h1>
+  <p>Virtuális tárgyak a saját szobádban. Megfoghatod, eldobhatod őket, és a padlóról visszapattannak.</p>
+  <ul>
+    <li>Ravasz vagy grip: megfogás — engedd el mozgás közben, és elrepül</li>
+    <li>Célozz a lebegő panelre, ravasz: vezérlés</li>
+  </ul>
+  <div id="status">Ellenőrzés…</div>
+  <button id="enter" disabled>Belépés</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var statusEl = document.getElementById('status');
+  var enterEl = document.getElementById('enter');
+  var uiEl = document.getElementById('ui');
+
+  var renderer, scene, camera, clock;
+  var bodies = [], controllers = [], panel, panelButtons = [];
+  var gravityOn = true, timeScale = 1, arMode = false, vrRoom = null;
+  var GRAV = -6.5, REST = 0.55, FRICTION = 0.985;
+  var raycaster = new THREE.Raycaster();
+  var tmpM = new THREE.Matrix4(), tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3();
+
+  var PALETTE = [0x57e2c4, 0xff8a5b, 0x8fb8ff, 0xffd166, 0xc792ea, 0x7ef0a0];
+
+  // ---------- setup ----------
+  function init() {
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 60);
+    camera.position.set(0, 1.6, 1.2);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType('local-floor');
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 0.85));
+    var dir = new THREE.DirectionalLight(0xffffff, 0.8);
+    dir.position.set(1.5, 3, 1);
+    scene.add(dir);
+
+    clock = new THREE.Clock();
+
+    buildRoom();
+    buildPanel();
+    buildControllers();
+    for (var i = 0; i < 8; i++) spawn(true);
+
+    window.addEventListener('resize', onResize);
+    renderer.setAnimationLoop(tick);
+  }
+
+  // Grid + horizon, only shown when passthrough is unavailable.
+  function buildRoom() {
+    vrRoom = new THREE.Group();
+    var grid = new THREE.GridHelper(12, 24, 0x57e2c4, 0x2a3442);
+    grid.material.opacity = 0.45;
+    grid.material.transparent = true;
+    vrRoom.add(grid);
+    var dome = new THREE.Mesh(
+      new THREE.SphereGeometry(25, 24, 16),
+      new THREE.MeshBasicMaterial({ color: 0x0e1116, side: THREE.BackSide })
+    );
+    vrRoom.add(dome);
+    vrRoom.visible = false;
+    scene.add(vrRoom);
+  }
+
+  // ---------- objects ----------
+  function spawn(quiet) {
+    if (bodies.length > 26) {
+      var old = bodies.shift();
+      scene.remove(old.mesh);
+      old.mesh.geometry.dispose();
+      old.mesh.material.dispose();
+    }
+    var r = 0.05 + Math.random() * 0.06;
+    var kind = Math.floor(Math.random() * 3);
+    var geo = kind === 0 ? new THREE.IcosahedronGeometry(r, 0)
+            : kind === 1 ? new THREE.BoxGeometry(r * 1.5, r * 1.5, r * 1.5)
+            : new THREE.SphereGeometry(r, 20, 14);
+    var color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+    var mat = new THREE.MeshStandardMaterial({
+      color: color, emissive: color, emissiveIntensity: 0.22,
+      roughness: 0.32, metalness: 0.25
+    });
+    var mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(
+      (Math.random() - 0.5) * 0.9,
+      1.25 + Math.random() * 0.6,
+      -0.45 - Math.random() * 0.5
+    );
+    scene.add(mesh);
+
+    var body = {
+      mesh: mesh, r: r,
+      vel: new THREE.Vector3(
+        (Math.random() - 0.5) * (quiet ? 0.2 : 0.8),
+        quiet ? 0 : 0.6,
+        (Math.random() - 0.5) * (quiet ? 0.2 : 0.8)
+      ),
+      spin: new THREE.Vector3((Math.random() - .5) * 2, (Math.random() - .5) * 2, (Math.random() - .5) * 2),
+      held: null
+    };
+    bodies.push(body);
+    return body;
+  }
+
+  function resetScene() {
+    while (bodies.length) {
+      var b = bodies.pop();
+      scene.remove(b.mesh);
+      b.mesh.geometry.dispose();
+      b.mesh.material.dispose();
+    }
+    controllers.forEach(function (c) { c.userData.held = null; });
+    for (var i = 0; i < 8; i++) spawn(true);
+  }
+
+  // ---------- spatial panel ----------
+  function labelTexture(text, accent) {
+    var c = document.createElement('canvas');
+    c.width = 512; c.height = 160;
+    var g = c.getContext('2d');
+    g.fillStyle = accent ? '#14342c' : '#161b23';
+    g.fillRect(0, 0, c.width, c.height);
+    g.strokeStyle = accent ? '#57e2c4' : '#33404f';
+    g.lineWidth = 8;
+    g.strokeRect(4, 4, c.width - 8, c.height - 8);
+    g.fillStyle = accent ? '#9ef7e2' : '#dde5ef';
+    g.font = '600 62px Inter, "Segoe UI", system-ui, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(text, c.width / 2, c.height / 2 + 4);
+    var tex = new THREE.CanvasTexture(c);
+    tex.anisotropy = 4;
+    return tex;
+  }
+
+  function makeButton(text, y, action) {
+    var mat = new THREE.MeshBasicMaterial({ map: labelTexture(text, false), transparent: true });
+    var mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.105), mat);
+    mesh.position.set(0, y, 0);
+    mesh.userData.action = action;
+    mesh.userData.setLabel = function (t, on) {
+      mat.map.dispose();
+      mat.map = labelTexture(t, on);
+      mat.needsUpdate = true;
+    };
+    panel.add(mesh);
+    panelButtons.push(mesh);
+    return mesh;
+  }
+
+  var gravBtn, slowBtn;
+  function buildPanel() {
+    panel = new THREE.Group();
+    panel.position.set(0.55, 1.25, -0.6);
+    panel.rotation.y = -0.5;
+    scene.add(panel);
+
+    var back = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.4, 0.52),
+      new THREE.MeshBasicMaterial({ color: 0x0b0f14, transparent: true, opacity: 0.72 })
+    );
+    back.position.z = -0.006;
+    panel.add(back);
+
+    makeButton('Új tárgy', 0.18, 'spawn');
+    gravBtn = makeButton('Gravitáció be', 0.06, 'gravity');
+    slowBtn = makeButton('Lassítás ki', -0.06, 'slow');
+    makeButton('Újraindítás', -0.18, 'reset');
+  }
+
+  function runAction(action, controller) {
+    if (action === 'spawn') { var b = spawn(false); b.vel.set(0, 1.2, 0); }
+    else if (action === 'gravity') {
+      gravityOn = !gravityOn;
+      gravBtn.userData.setLabel(gravityOn ? 'Gravitáció be' : 'Gravitáció ki', !gravityOn);
+      if (!gravityOn) bodies.forEach(function (b) { b.vel.multiplyScalar(0.35); });
+    }
+    else if (action === 'slow') {
+      timeScale = timeScale === 1 ? 0.25 : 1;
+      slowBtn.userData.setLabel(timeScale === 1 ? 'Lassítás ki' : 'Lassítás be', timeScale !== 1);
+    }
+    else if (action === 'reset') resetScene();
+    pulse(controller, 0.6, 40);
+  }
+
+  // ---------- controllers ----------
+  function pulse(controller, intensity, ms) {
+    if (!controller) return;
+    var src = controller.userData.inputSource;
+    var act = src && src.gamepad && src.gamepad.hapticActuators && src.gamepad.hapticActuators[0];
+    if (act && act.pulse) { try { act.pulse(intensity, ms); } catch (e) {} }
+  }
+
+  function buildControllers() {
+    var rayGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)
+    ]);
+
+    for (var i = 0; i < 2; i++) {
+      var c = renderer.xr.getController(i);
+      c.userData = {
+        held: null, prev: new THREE.Vector3(), vel: new THREE.Vector3(),
+        inputSource: null, hasPrev: false
+      };
+
+      var ray = new THREE.Line(rayGeo, new THREE.LineBasicMaterial({
+        color: 0x57e2c4, transparent: true, opacity: 0.6
+      }));
+      ray.scale.z = 1.4;
+      c.add(ray);
+
+      var tip = new THREE.Mesh(
+        new THREE.SphereGeometry(0.012, 12, 10),
+        new THREE.MeshBasicMaterial({ color: 0xffffff })
+      );
+      c.add(tip);
+
+      c.addEventListener('connected', (function (ctrl) {
+        return function (e) { ctrl.userData.inputSource = e.data; };
+      })(c));
+      c.addEventListener('selectstart', onGripStart);
+      c.addEventListener('selectend', onGripEnd);
+      c.addEventListener('squeezestart', onGripStart);
+      c.addEventListener('squeezeend', onGripEnd);
+
+      scene.add(c);
+      controllers.push(c);
+    }
+  }
+
+  function onGripStart(e) {
+    var c = e.target;
+
+    // Pointer first: is the ray on a panel button?
+    tmpM.identity().extractRotation(c.matrixWorld);
+    raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
+    raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpM);
+    var hits = raycaster.intersectObjects(panelButtons, false);
+    if (hits.length && hits[0].distance < 3) {
+      runAction(hits[0].object.userData.action, c);
+      return;
+    }
+
+    // Otherwise grab the nearest object near the controller.
+    c.getWorldPosition(tmpV);
+    var best = null, bestD = 0.2;
+    for (var i = 0; i < bodies.length; i++) {
+      var b = bodies[i];
+      if (b.held) continue;
+      var d = b.mesh.position.distanceTo(tmpV) - b.r;
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    if (best) {
+      best.held = c;
+      c.userData.held = best;
+      best.vel.set(0, 0, 0);
+      pulse(c, 0.45, 25);
+    }
+  }
+
+  function onGripEnd(e) {
+    var c = e.target;
+    var b = c.userData.held;
+    if (!b) return;
+    b.vel.copy(c.userData.vel).multiplyScalar(1.15);
+    var max = 9;
+    if (b.vel.length() > max) b.vel.setLength(max);
+    b.spin.set(c.userData.vel.z * 3, c.userData.vel.x * 3, (Math.random() - .5) * 2);
+    b.held = null;
+    c.userData.held = null;
+    pulse(c, 0.3, 18);
+  }
+
+  // ---------- physics ----------
+  function step(dt) {
+    var i, j, b;
+
+    for (i = 0; i < controllers.length; i++) {
+      var c = controllers[i];
+      c.getWorldPosition(tmpV);
+      if (c.userData.hasPrev && dt > 0) {
+        tmpV2.copy(tmpV).sub(c.userData.prev).divideScalar(dt);
+        c.userData.vel.lerp(tmpV2, 0.55);
+      }
+      c.userData.prev.copy(tmpV);
+      c.userData.hasPrev = true;
+
+      b = c.userData.held;
+      if (b) {
+        c.getWorldPosition(b.mesh.position);
+        b.mesh.rotateY(dt * 1.2);
+      }
+    }
+
+    for (i = 0; i < bodies.length; i++) {
+      b = bodies[i];
+      if (b.held) continue;
+
+      if (gravityOn) b.vel.y += GRAV * dt;
+      else {
+        b.vel.y += Math.sin(performance.now() * 0.0007 + i) * 0.08 * dt;
+        b.vel.multiplyScalar(0.999);
+      }
+
+      b.mesh.position.addScaledVector(b.vel, dt);
+      b.mesh.rotation.x += b.spin.x * dt;
+      b.mesh.rotation.y += b.spin.y * dt;
+      b.mesh.rotation.z += b.spin.z * dt;
+
+      // floor
+      if (b.mesh.position.y < b.r) {
+        b.mesh.position.y = b.r;
+        if (b.vel.y < 0) {
+          b.vel.y = -b.vel.y * REST;
+          b.vel.x *= FRICTION; b.vel.z *= FRICTION;
+          b.spin.multiplyScalar(0.8);
+          if (Math.abs(b.vel.y) < 0.35) b.vel.y = 0;
+        }
+      }
+      // soft walls so nothing escapes the play space
+      ['x', 'z'].forEach(function (ax) {
+        var lim = 2.4;
+        if (b.mesh.position[ax] > lim) { b.mesh.position[ax] = lim; b.vel[ax] = -Math.abs(b.vel[ax]) * REST; }
+        if (b.mesh.position[ax] < -lim) { b.mesh.position[ax] = -lim; b.vel[ax] = Math.abs(b.vel[ax]) * REST; }
+      });
+      if (b.mesh.position.y > 3.2) { b.mesh.position.y = 3.2; b.vel.y = -Math.abs(b.vel.y) * REST; }
+    }
+
+    // pairwise collisions
+    for (i = 0; i < bodies.length; i++) {
+      for (j = i + 1; j < bodies.length; j++) {
+        var a = bodies[i], c2 = bodies[j];
+        tmpV.copy(c2.mesh.position).sub(a.mesh.position);
+        var dist = tmpV.length();
+        var min = a.r + c2.r;
+        if (dist > 0.00001 && dist < min) {
+          tmpV.divideScalar(dist);
+          var overlap = (min - dist);
+          if (!a.held) a.mesh.position.addScaledVector(tmpV, -overlap * (c2.held ? 1 : 0.5));
+          if (!c2.held) c2.mesh.position.addScaledVector(tmpV, overlap * (a.held ? 1 : 0.5));
+          var rel = tmpV2.copy(c2.vel).sub(a.vel).dot(tmpV);
+          if (rel < 0) {
+            var imp = -(1 + REST) * rel / 2;
+            if (!a.held) a.vel.addScaledVector(tmpV, -imp);
+            if (!c2.held) c2.vel.addScaledVector(tmpV, imp);
+          }
+        }
+      }
+    }
+  }
+
+  function tick() {
+    var dt = Math.min(clock.getDelta(), 0.05) * timeScale;
+    step(dt);
+    if (!renderer.xr.isPresenting) {
+      camera.position.x = Math.sin(performance.now() * 0.00015) * 1.4;
+      camera.position.z = Math.cos(performance.now() * 0.00015) * 1.4 + 0.3;
+      camera.lookAt(0, 1.1, -0.3);
+    }
+    renderer.render(scene, camera);
+  }
+
+  function onResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  // ---------- session ----------
+  var inFrame = false;
+  try { inFrame = window.self !== window.top; } catch (e) { inFrame = true; }
+
+  // Chain of attempts, tried in order. requestSession must be called
+  // synchronously from the click, so no async check happens before it.
+  var ATTEMPTS = [
+    { mode: 'immersive-ar', ar: true,  opts: { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] } },
+    { mode: 'immersive-ar', ar: true,  opts: undefined },
+    { mode: 'immersive-vr', ar: false, opts: { optionalFeatures: ['local-floor', 'hand-tracking'] } },
+    { mode: 'immersive-vr', ar: false, opts: undefined }
+  ];
+
+  function onSession(session, attempt) {
+    arMode = attempt.ar;
+    vrRoom.visible = !attempt.ar;
+    scene.background = null;
+    uiEl.style.display = 'none';
+    session.addEventListener('end', function () {
+      uiEl.style.display = 'flex';
+      statusEl.textContent = 'Kiléptél. Bármikor visszamehetsz.';
+    });
+    var spaces = ['local-floor', 'local'];
+    (function trySpace(i) {
+      if (i >= spaces.length) { renderer.xr.setSession(session); return; }
+      session.requestReferenceSpace(spaces[i]).then(function () {
+        renderer.xr.setReferenceSpaceType(spaces[i]);
+        if (spaces[i] === 'local') scene.position.y = -1.2; // no floor data: drop the scene to eye-relative
+        renderer.xr.setSession(session);
+      }).catch(function () { trySpace(i + 1); });
+    })(0);
+  }
+
+  function attempt(i, lastErr) {
+    if (i >= ATTEMPTS.length) {
+      statusEl.textContent = (inFrame
+        ? 'A beágyazott panel nem kap headset-hozzáférést. Nyisd meg a lapot külön fülön: claude.ai/artifact/7zncMsbb1ypgRvox8K53e2'
+        : 'Nem indult el: ' + (lastErr && lastErr.message ? lastErr.message : 'ismeretlen hiba') + ' — nyomd meg még egyszer a gombot.');
+      return;
+    }
+    var a = ATTEMPTS[i];
+    var p;
+    try {
+      p = a.opts ? navigator.xr.requestSession(a.mode, a.opts) : navigator.xr.requestSession(a.mode);
+    } catch (err) {
+      attempt(i + 1, err);
+      return;
+    }
+    p.then(function (session) { onSession(session, a); })
+     .catch(function (err) { attempt(i + 1, err); });
+  }
+
+  function startSession() {
+    if (!navigator.xr) {
+      statusEl.textContent = 'Nincs WebXR ezen a lapon. Nyisd meg külön fülön a Quest böngészőjében.';
+      return;
+    }
+    statusEl.textContent = 'Indítás…';
+    attempt(0, null);
+  }
+
+  function allowAnyway(msg) {
+    statusEl.textContent = msg;
+    enterEl.disabled = false;
+  }
+
+  function probe() {
+    if (!navigator.xr) {
+      if (inFrame) {
+        allowAnyway('Beágyazott nézetben a headset-hozzáférés tiltott. Nyisd meg a lapot külön fülön (jobb felül a megnyitás ikon), vagy másold a linket a Quest böngészőjének címsorába.');
+      } else {
+        statusEl.textContent = 'Ez a böngésző nem támogatja a WebXR-t. Nyisd meg a Quest böngészőjében.';
+      }
+      return;
+    }
+
+    var settled = false;
+    setTimeout(function () {
+      if (!settled) allowAnyway('Az ellenőrzés nem válaszolt' + (inFrame ? ' (beágyazott nézet)' : '') + ' — próbáld meg a belépést.');
+    }, 2500);
+
+    navigator.xr.isSessionSupported('immersive-ar').then(function (ar) {
+      if (ar) {
+        settled = true;
+        statusEl.textContent = 'Quest észlelve — passthrough módban indul.';
+        enterEl.disabled = false;
+        return;
+      }
+      return navigator.xr.isSessionSupported('immersive-vr').then(function (vr) {
+        settled = true;
+        if (vr) allowAnyway('VR mód elérhető (passthrough nélkül).');
+        else if (inFrame) allowAnyway('Beágyazott nézetben nincs headset-hozzáférés. Nyisd meg külön fülön, vagy írd be a linket a Quest böngészőjébe.');
+        else statusEl.textContent = 'Nincs elérhető headset ezen az eszközön.';
+      });
+    }).catch(function (err) {
+      settled = true;
+      allowAnyway('Ellenőrzési hiba: ' + err.message + ' — próbáld meg a belépést.');
+    });
+  }
+
+  try {
+    if (typeof THREE === 'undefined') throw new Error('a 3D könyvtár nem töltődött be');
+    init();
+    probe();
+  } catch (err) {
+    statusEl.textContent = 'Indítási hiba: ' + err.message;
+  }
+
+  enterEl.addEventListener('click', startSession);
+})();
+</script>
+</body>
+</html>

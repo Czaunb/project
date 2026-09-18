@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebXR kontextus-ellenőrző</title>
+<style>
+  :root { color-scheme: dark light; }
+  body {
+    margin: 0; padding: 24px;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #12141a; color: #e8ebf2;
+    max-width: 780px; margin-inline: auto;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #99a1b3; margin: 0 0 24px; font-size: 14px; }
+  .diag {
+    font-size: 19px; font-weight: 600; line-height: 1.6;
+    padding: 16px 18px; border-radius: 10px;
+    background: #1c2029; border: 1px solid #2c3140;
+    margin: 0 0 20px; word-break: break-word;
+  }
+  .ok { color: #4ade80; }
+  .bad { color: #f87171; }
+  table { width: 100%; border-collapse: collapse; margin: 0 0 24px; font-size: 14px; }
+  td { padding: 8px 10px; border-bottom: 1px solid #262b36; vertical-align: top; }
+  td:first-child { color: #99a1b3; width: 42%; }
+  td:last-child { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+  button {
+    font: inherit; font-size: 18px; font-weight: 600;
+    padding: 16px 28px; width: 100%;
+    border: 0; border-radius: 10px; cursor: pointer;
+    background: #3b82f6; color: #fff;
+  }
+  button:disabled { background: #39404f; color: #838b9c; cursor: not-allowed; }
+  #result { margin: 16px 0 0; font-size: 16px; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<h1>WebXR kontextus-ellenőrző</h1>
+<p class="sub">Ha ez az oldal zöldet mutat, az origó alkalmas a demó futtatására.</p>
+
+<p class="diag" id="line">Mérés…</p>
+
+<table id="details"></table>
+
+<button id="enter" disabled>Belépés teszt (immersive-ar)</button>
+<p id="result"></p>
+
+<script>
+(function () {
+  var secure = window.isSecureContext === true;
+  var hasXR  = typeof navigator !== 'undefined' && 'xr' in navigator && !!navigator.xr;
+  var framed = window.self !== window.top;
+
+  function mark(label, good) {
+    return '<span class="' + (good ? 'ok' : 'bad') + '">' + label + '</span>';
+  }
+
+  document.getElementById('line').innerHTML =
+    'HTTPS / biztonságos kontextus: ' + mark(secure ? 'igen' : 'nem', secure) +
+    ' &middot; WebXR: ' + mark(hasXR ? 'elérhető' : 'nem elérhető', hasXR) +
+    ' &middot; keretben: ' + mark(framed ? 'igen' : 'nem', !framed);
+
+  var rows = [
+    ['protokoll', location.protocol],
+    ['origó', location.origin],
+    ['isSecureContext', String(secure)],
+    ['navigator.xr', hasXR ? 'van' : 'nincs'],
+    ['iframe-ben fut', framed ? 'IGEN – ez megakadályozza a WebXR-t' : 'nem'],
+    ['immersive-ar', 'ellenőrzés…'],
+    ['immersive-vr', 'ellenőrzés…'],
+    ['user agent', navigator.userAgent]
+  ];
+
+  var table = document.getElementById('details');
+  table.innerHTML = rows.map(function (r) {
+    return '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>';
+  }).join('');
+
+  function setRow(index, text) {
+    table.rows[index].cells[1].textContent = text;
+  }
+
+  var arSupported = false;
+
+  function probe(mode, rowIndex) {
+    if (!hasXR) { setRow(rowIndex, 'n/a – nincs navigator.xr'); return Promise.resolve(false); }
+    return navigator.xr.isSessionSupported(mode).then(function (ok) {
+      setRow(rowIndex, ok ? 'támogatott' : 'nem támogatott');
+      return ok;
+    }).catch(function (err) {
+      setRow(rowIndex, 'hiba: ' + (err && err.message ? err.message : String(err)));
+      return false;
+    });
+  }
+
+  Promise.all([probe('immersive-ar', 5), probe('immersive-vr', 6)]).then(function (res) {
+    arSupported = res[0];
+    document.getElementById('enter').disabled = !(res[0] || res[1]);
+  });
+
+  var result = document.getElementById('result');
+
+  document.getElementById('enter').addEventListener('click', function () {
+    var mode = arSupported ? 'immersive-ar' : 'immersive-vr';
+    result.textContent = mode + ' session kérése…';
+    navigator.xr.requestSession(mode).then(function (session) {
+      result.innerHTML = '<span class="ok">Siker: a ' + mode +
+        ' session elindult. Lezárás…</span>';
+      return session.end();
+    }).then(function () {
+      result.innerHTML += ' <span class="ok">Az origó rendben van.</span>';
+    }).catch(function (err) {
+      result.innerHTML = '<span class="bad">Hiba: ' +
+        (err && err.message ? err.message : String(err)) + '</span>';
+    });
+  });
+})();
+</script>
+</body>
+</html>
