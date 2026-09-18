@@ -11,6 +11,12 @@ mutatja, és egy gombbal valódi `immersive-ar` sessiont is kér próbaképpen:
 HTTPS / biztonságos kontextus: igen · WebXR: elérhető · keretben: nem
 ```
 
+## Melyiket válaszd
+
+- **A)** működik most, a te gépedről, GitHub-beállítás nélkül — **ezzel kezdd.**
+- **B)** állandó, rövid címet ad, de előbb publikussá kell tenni a repót (lásd ott).
+- **C)** kábellel, tunnel nélkül, ha nem akarsz semmit kitenni a netre.
+
 ---
 
 ## A) Ideiglenes cím a saját gépedről (a leggyorsabb)
@@ -59,21 +65,39 @@ cloudflared tunnel --url http://127.0.0.1:8080
 
 ## B) Tartós cím: GitHub Pages
 
-Ez a repó **privát**, a GitHub Pages viszont ingyenes csomagon csak publikus
-repónál működik (fizetősnél a privát Pages-oldal is csak GitHub-bejelentkezés
-után nyílik meg — headsetben kényelmetlen).
+**Jelenleg nem működik — kipróbálva.** A workflow lefutott a push után, és
+elbukott a Pages-oldal létrehozásánál:
 
-1. GitHub → a repó **Settings** → legalul **Change repository visibility** →
-   **Make public**.
-2. Push a branchre (vagy a Actions fülön *Deploy to GitHub Pages* →
-   *Run workflow*). A workflow `enablement: true`-val magától bekapcsolja a
-   Pages-t, nem kell külön beállítani.
-3. A cím ezután állandó:
+```
+Get Pages site failed.    Error: Not Found
+Create Pages site failed. Error: Resource not accessible by integration
+```
+
+Futás: https://github.com/Czaunb/project/actions/runs/35401598525
+
+Ez a repó **privát**, a GitHub Pages viszont ingyenes csomagon csak publikus
+repónál érhető el. (Fizetős csomagon a privát Pages-oldal is csak
+GitHub-bejelentkezés után nyílik meg — headsetben kényelmetlen.)
+
+### Hogyan élesítsd
+
+1. **Tedd publikussá a repót:** Settings → legalul *Danger Zone* →
+   *Change repository visibility* → **Make public**.
+   Ezzel a demó forrása bárki számára látható lesz.
+2. Ha a fenti hiba így is jön, engedd a workflow írási jogát:
+   Settings → Actions → General → *Workflow permissions* →
+   **Read and write permissions**.
+   Vagy kapcsold be a Pages-t kézzel: Settings → Pages → *Source:*
+   **GitHub Actions** (ekkor az `enablement: true` már nem számít).
+3. Indítsd újra: Actions fül → *Deploy to GitHub Pages* → **Run workflow**.
+4. A cím ezután állandó:
 
 ```
 https://czaunb.github.io/project/
 https://czaunb.github.io/project/check.html
 ```
+
+Ez a legkényelmesebb cím headsetben, mert rövid és nem változik.
 
 ---
 
