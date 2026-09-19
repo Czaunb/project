@@ -126,6 +126,7 @@ python3 -m http.server 8080 --bind 127.0.0.1
 | `/lab` | **Szobalabor**: kézkövetés, a valódi szoba síkjai, térbeli hang |
 | `/arena` | **Szakadék** — hullámok, pontszám, kombó, pajzs, generatív zene |
 | `/game` | **Zárótűz** — pisztoly + pajzs, telegrafált támadások, 5 ellenféltípus |
+| `/prizma` | **Prizma** — teljes VR műhely: járkálás, 4 zóna, pályaépítő, 4 fegyver |
 
 A `lab/` a Quest 3 fejlettebb WebXR-képességeit használja, mindet
 *opcionálisan*: nincs egyetlen `requiredFeature` sem, így ha valamelyik nem
@@ -209,7 +210,66 @@ hívás), a részecskék egyetlen `Points` objektumban (728 részecske = 1 hív�
 A képkockahurokban nincs memóriafoglalás — a pajzs energiaíve is előre
 legyártott geometriákból választ.
 
+### Prizma (`/prizma`)
+
+Nem játék, hanem **keretrendszer**. Teljes VR, passthrough nélkül. Egy
+központi csarnok, amiből zónákba lehet átsétálni — és egy új ötlet
+mindössze egy új objektum a `registerZones()` listájában.
+
+### Mozgás — a Meta kényelmi ajánlásai szerint
+- **valós tempó**: séta 1,45 m/s, futás 2,85 m/s (a túl gyors mozgás okozza a rosszullétet)
+- **45°-os pattanó fordulás** rövid elsötétüléssel; a fej közben **helyben marad**
+- **dinamikus vignetta** a sebesség arányában, megálláskor azonnal visszanyílik
+- korlátozott gyorsulás — a rándulás a másik fő kiváltó ok
+
+### Zónák
+| zóna | tartalom |
+|---|---|
+| **Központ** | oszlopok élő előnézettel; a fényükbe sétálva utazol |
+| **Lőtér** | 4 fegyver, fedezékek, 5 ellenféltípus |
+| **Építő** | rakd le, mentsd el, és **teszteld is** a saját pályád |
+| **Végtelen** | 30 000 objektum egyetlen rajzolási hívásban |
+
+### Fegyverek
+Pisztoly (pontos), Sörétes (9 szem, közelre), Géppisztoly (automata),
+Sínágyú (felhúzós, átüt mindent). Váltás az A/X gombbal, a fegyveren
+saját kijelző mutatja a nevet és a lőszert.
+
+### Ellenfelek
+- **Vadász** — fedezékbe húzódik, onnan tüzel
+- **Pajzsos** — elöl pajzs: **csak oldalról sebezhető**, és lassan fordul,
+  hogy tényleg meg lehessen kerülni (ezért kellett a járkálás)
+- **Mesterlövész** — célzólézerrel jelez, sokat sebez
+- **Raj** — gyors, közelharcos, sokan
+- **Titán** — a teste páncélozott, csak a három gyenge pontja sebezhető
+
+### Építő
+0,5 m-es háló, 5 alakzat, 7 szín, 1200 elemig. A vezérlés **talapzatokon**
+van, nem menüben: rálépsz a MENTÉS, BETÖLTÉS, TÖRLÉS, TESZT, ALAKZAT vagy
+SZÍN korongra. A pálya `localStorage`-ba megy, a TESZT pedig drónokat rak
+bele, hogy le is lehessen játszani.
+
+### Teljesítmény
+Rajzolási hívás zónánként, terhelés alatt (40 lövedék + 200 részecske,
+a lőtéren 8 ellenféllel): **központ 56, lőtér 42, építő 11, végtelen 10.**
+A végtelen 30 000 objektuma egyetlen `InstancedMesh`, a hullámzása
+vertex shaderben fut, tehát a processzort nem terheli.
+
 ### Ellenőrzés
+34 viselkedés mérve headless Chromiumban: kézhozzárendelés, zónák,
+járás iránya és tempója, vignetta be- és kikapcsolása, 45°-os fordulás
+**fejelmozdulás nélkül** (0,00000 m), mind a négy fegyver tüzelése és
+lőszerfogyása, a sörétes 9 szeme, üres tár, pajzsos szemből/oldalról,
+korlátozott fordulási sebesség, boss páncélja és gyenge pontjai,
+mesterlövész jelzése, blokk lerakása/törlése, mentés–betöltés körbe
+(alakzattal és színnel), teszt drón lelövése, 30 000 objektum,
+rajzolási hívások és 60 mp folyamatos futás hiba nélkül.
+
+Javítva közben: a `lookAt` a three.js-ben a **+Z** tengelyt fordítja a
+célpontra, nem a −Z-t. Emiatt a pajzsos lemeze és a boss gyenge pontjai
+is a hátoldalra kerültek — vagyis a bosst nem lehetett volna megölni.
+
+## Ellenőrzés
 30 viselkedés mérve headless Chromiumban: fegyver (lövés, tűzgyorsaság,
 tár, újratöltés, visszarúgás), átugrás elleni védelem, páncélos
 sérthetetlensége zárva és sebezhetősége nyitva, ellenfél jelzése és
