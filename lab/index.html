@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Szobalabor — Quest 3</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --ink: #eef2f7;
+    --muted: #9aa7b8;
+    --line: #232a35;
+    --glow: #57e2c4;
+    --glow-2: #ff8a5b;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  canvas { display: block; }
+  #ui {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    padding: clamp(20px, 5vw, 56px);
+    gap: 16px;
+    pointer-events: none;
+    background: linear-gradient(to top, rgba(14,17,22,.96) 34%, rgba(14,17,22,.45) 72%, transparent);
+  }
+  #ui > * { pointer-events: auto; max-width: 52ch; }
+  h1 {
+    margin: 0;
+    font-size: clamp(28px, 7.5vw, 50px);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1.02;
+  }
+  p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 15px; }
+  ul { margin: 0; padding-left: 1.1em; color: var(--muted); font-size: 14px; line-height: 1.75; }
+  ul b { color: var(--ink); font-weight: 600; }
+  #caps {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    font-size: 12.5px; line-height: 1;
+  }
+  .cap {
+    padding: 6px 10px; border-radius: 999px;
+    border: 1px solid var(--line); background: #151a22; color: var(--muted);
+    white-space: nowrap;
+  }
+  .cap.on  { border-color: rgba(87,226,196,.5); color: var(--glow); background: rgba(87,226,196,.08); }
+  .cap.off { border-color: rgba(255,138,91,.35); color: var(--glow-2); background: rgba(255,138,91,.06); }
+  #status { font-size: 14px; color: var(--glow); min-height: 1.4em; }
+  button {
+    font: inherit; font-weight: 600; font-size: 17px;
+    color: #06231d;
+    background: var(--glow);
+    border: 0; border-radius: 999px;
+    padding: 15px 30px;
+    cursor: pointer;
+    align-self: flex-start;
+    transition: transform .12s ease, background .12s ease;
+  }
+  button:hover { background: #6df0d4; }
+  button:active { transform: scale(.97); }
+  button:disabled { background: var(--line); color: var(--muted); cursor: default; }
+  button:focus-visible { outline: 3px solid var(--glow-2); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>Szobalabor</h1>
+  <p>
+    A tárgyak a <b>te valódi falaidról és bútoraidról</b> pattannak vissza, a
+    kezeddel fogod meg őket kontroller nélkül, és minden koppanás onnan szól,
+    ahol történt.
+  </p>
+  <ul>
+    <li><b>Csippentés</b> (hüvelyk + mutató): megfogás — engedd el mozgás közben, és elrepül</li>
+    <li><b>Csippentés a levegőben</b>: telekinézis, a tárgyak a tenyeredhez úsznak</li>
+    <li><b>Bökd meg</b> a lebegő panel gombjait — vagy célozz rájuk a kontrollerrel</li>
+  </ul>
+  <div id="caps"></div>
+  <div id="status">Ellenőrzés…</div>
+  <button id="enter" disabled>Belépés</button>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+const statusEl = document.getElementById('status');
+const enterEl  = document.getElementById('enter');
+const uiEl     = document.getElementById('ui');
+const capsEl   = document.getElementById('caps');
+
+// Minden haladó képesség opcionális. Ami nem jön össze, az kimarad,
+// a demó attól még fut — ezért nincs egyetlen requiredFeature sem.
+const WANTED = [
+  'local-floor', 'bounded-floor', 'hand-tracking',
+  'plane-detection', 'mesh-detection', 'anchors', 'hit-test'
+];
+
+const PALETTE = [0x57e2c4, 0xff8a5b, 0x8fb8ff, 0xffd166, 0xc792ea, 0x7ef0a0];
+const GRAV = -6.5, REST = 0.55, FRICTION = 0.985;
+const MAX_BODIES = 30;
+
+const S = {
+  renderer: null, scene: null, camera: null, clock: null,
+  bodies: [], controllers: [], hands: [],
+  planes: new Map(),        // XRPlane -> { normal, origin, quat, min, max, mesh }
+  roomGroup: null, fallbackRoom: null,
+  panel: null, panelButtons: [],
+  gravityOn: true, timeScale: 1, showRoom: true,
+  usingRealRoom: false,
+  granted: [], session: null,
+  audio: null, soundsThisFrame: 0,
+  hudCanvas: null, hudCtx: null, hudTex: null, hudMesh: null
+};
+
+const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3();
+const tmpQ = new THREE.Quaternion(), tmpM = new THREE.Matrix4();
+const raycaster = new THREE.Raycaster();
+
+// ---------- alapok ----------
+function init() {
+  S.scene = new THREE.Scene();
+  S.camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 60);
+  S.camera.position.set(0, 1.6, 1.4);
+
+  S.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  S.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  S.renderer.setSize(innerWidth, innerHeight);
+  S.renderer.xr.enabled = true;
+  S.renderer.xr.setReferenceSpaceType('local-floor');
+  document.body.appendChild(S.renderer.domElement);
+
+  S.scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 0.9));
+  const dir = new THREE.DirectionalLight(0xffffff, 0.85);
+  dir.position.set(1.5, 3, 1);
+  S.scene.add(dir);
+
+  S.clock = new THREE.Clock();
+  S.roomGroup = new THREE.Group();
+  S.scene.add(S.roomGroup);
+
+  buildFallbackRoom();
+  buildPanel();
+  buildHud();
+  setupInputs();
+  for (let i = 0; i < 10; i++) spawn(true);
+
+  addEventListener('resize', onResize);
+  S.renderer.setAnimationLoop(tick);
+}
+
+// Rács + kupola: csak akkor látszik, ha nincs passthrough vagy nincs valódi szoba.
+function buildFallbackRoom() {
+  S.fallbackRoom = new THREE.Group();
+  const grid = new THREE.GridHelper(12, 24, 0x57e2c4, 0x2a3442);
+  grid.material.opacity = 0.45;
+  grid.material.transparent = true;
+  S.fallbackRoom.add(grid);
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(25, 24, 16),
+    new THREE.MeshBasicMaterial({ color: 0x0e1116, side: THREE.BackSide })
+  );
+  S.fallbackRoom.add(dome);
+  S.scene.add(S.fallbackRoom);
+}
+
+function disposeMesh(m) {
+  if (!m) return;
+  if (m.geometry) m.geometry.dispose();
+  if (m.material) (Array.isArray(m.material) ? m.material : [m.material]).forEach(x => x.dispose());
+}
+
+// ---------- tárgyak ----------
+function spawn(quiet) {
+  if (S.bodies.length >= MAX_BODIES) {
+    const old = S.bodies.shift();
+    S.scene.remove(old.mesh);
+    disposeMesh(old.mesh);
+  }
+  const r = 0.05 + Math.random() * 0.06;
+  const kind = Math.floor(Math.random() * 3);
+  const geo = kind === 0 ? new THREE.IcosahedronGeometry(r, 0)
+            : kind === 1 ? new THREE.BoxGeometry(r * 1.5, r * 1.5, r * 1.5)
+            : new THREE.SphereGeometry(r, 20, 14);
+  const color = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+  const mat = new THREE.MeshStandardMaterial({
+    color, emissive: color, emissiveIntensity: 0.24,
+    roughness: 0.32, metalness: 0.25
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(
+    (Math.random() - 0.5) * 0.9,
+    1.3 + Math.random() * 0.5,
+    -0.5 - Math.random() * 0.5
+  );
+  S.scene.add(mesh);
+
+  const body = {
+    mesh, r, mat,
+    vel: new THREE.Vector3(
+      (Math.random() - 0.5) * (quiet ? 0.2 : 0.8),
+      quiet ? 0 : 0.6,
+      (Math.random() - 0.5) * (quiet ? 0.2 : 0.8)
+    ),
+    spin: new THREE.Vector3((Math.random() - .5) * 2, (Math.random() - .5) * 2, (Math.random() - .5) * 2),
+    held: null, glow: 0
+  };
+  S.bodies.push(body);
+  return body;
+}
+
+function resetScene() {
+  while (S.bodies.length) {
+    const b = S.bodies.pop();
+    S.scene.remove(b.mesh);
+    disposeMesh(b.mesh);
+  }
+  S.controllers.forEach(c => { c.userData.held = null; });
+  S.hands.forEach(h => { h.userData.held = null; });
+  for (let i = 0; i < 10; i++) spawn(true);
+}
+
+// ---------- a valódi szoba ----------
+// A frame.detectedPlanes minden képkockán megadja a felismert síkokat
+// (padló, falak, asztallap). Ezekből lesz ütközőfelület és körvonal.
+function updatePlanes(frame, refSpace) {
+  let detected = null;
+  try { detected = frame.detectedPlanes; } catch (e) { return; }
+  if (!detected) return;
+
+  for (const [plane, rec] of S.planes) {
+    let alive = true;
+    try { alive = detected.has(plane); } catch (e) { alive = true; }
+    if (!alive) {
+      S.roomGroup.remove(rec.mesh);
+      disposeMesh(rec.mesh);
+      S.planes.delete(plane);
+    }
+  }
+
+  for (const plane of detected) {
+    let pose = null;
+    try { pose = frame.getPose(plane.planeSpace, refSpace); } catch (e) { continue; }
+    if (!pose) continue;
+
+    let rec = S.planes.get(plane);
+    if (!rec || rec.stamp !== plane.lastChangedTime) {
+      if (rec) { S.roomGroup.remove(rec.mesh); disposeMesh(rec.mesh); }
+      rec = buildPlaneRecord(plane);
+      if (!rec) continue;
+      S.planes.set(plane, rec);
+      S.roomGroup.add(rec.mesh);
+    }
+
+    const p = pose.transform.position, o = pose.transform.orientation;
+    rec.origin.set(p.x, p.y, p.z);
+    rec.quat.set(o.x, o.y, o.z, o.w);
+    rec.invQuat.copy(rec.quat).invert();
+    rec.normal.set(0, 1, 0).applyQuaternion(rec.quat);
+    rec.mesh.position.copy(rec.origin);
+    rec.mesh.quaternion.copy(rec.quat);
+  }
+
+  const has = S.planes.size > 0;
+  if (has !== S.usingRealRoom) {
+    S.usingRealRoom = has;
+    S.fallbackRoom.visible = !has;
+  }
+}
+
+// A polygon pontjai a sík saját terében vannak, ott az Y a normális irány.
+function buildPlaneRecord(plane) {
+  const poly = plane.polygon;
+  if (!poly || poly.length < 3) return null;
+
+  const pts = [];
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const q of poly) {
+    pts.push(new THREE.Vector3(q.x, 0, q.z));
+    if (q.x < minX) minX = q.x;
+    if (q.x > maxX) maxX = q.x;
+    if (q.z < minZ) minZ = q.z;
+    if (q.z > maxZ) maxZ = q.z;
+  }
+
+  const vertical = plane.orientation === 'vertical';
+  const mesh = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({
+      color: vertical ? 0x8fb8ff : 0x57e2c4,
+      transparent: true, opacity: 0.55
+    })
+  );
+  mesh.visible = S.showRoom;
+
+  return {
+    stamp: plane.lastChangedTime,
+    origin: new THREE.Vector3(),
+    quat: new THREE.Quaternion(),
+    invQuat: new THREE.Quaternion(),
+    normal: new THREE.Vector3(0, 1, 0),
+    min: { x: minX, z: minZ },
+    max: { x: maxX, z: maxZ },
+    vertical, mesh
+  };
+}
+
+// Gömb kontra sík: a testet a sík saját terébe visszük, ott a vizsgálat
+// három összehasonlítás, aztán visszatükrözzük a sebességet a normálisra.
+function collidePlanes(b) {
+  for (const rec of S.planes.values()) {
+    tmpV.copy(b.mesh.position).sub(rec.origin).applyQuaternion(rec.invQuat);
+    if (Math.abs(tmpV.y) > b.r) continue;
+    if (tmpV.x < rec.min.x - b.r || tmpV.x > rec.max.x + b.r) continue;
+    if (tmpV.z < rec.min.z - b.r || tmpV.z > rec.max.z + b.r) continue;
+
+    const side = tmpV.y >= 0 ? 1 : -1;
+    tmpV.y = side * b.r;
+    b.mesh.position.copy(tmpV).applyQuaternion(rec.quat).add(rec.origin);
+
+    const vn = b.vel.dot(rec.normal);
+    if (vn * side < 0) {
+      const speed = Math.abs(vn);
+      b.vel.addScaledVector(rec.normal, -(1 + REST) * vn);
+      tmpV2.copy(rec.normal).multiplyScalar(b.vel.dot(rec.normal));
+      tmpV3.copy(b.vel).sub(tmpV2).multiplyScalar(FRICTION);
+      b.vel.copy(tmpV2).add(tmpV3);
+      b.spin.multiplyScalar(0.82);
+      if (speed > 0.35) impact(b, speed);
+    }
+  }
+}
+
+// ---------- bemenet: kontroller és kéz ----------
+const dotGeo = new THREE.SphereGeometry(0.01, 10, 8);
+const handMat = new THREE.MeshStandardMaterial({
+  color: 0x57e2c4, emissive: 0x2ba98f, emissiveIntensity: 0.5,
+  roughness: 0.4, metalness: 0.1
+});
+const pinchMat = new THREE.MeshStandardMaterial({
+  color: 0xff8a5b, emissive: 0xff8a5b, emissiveIntensity: 0.8,
+  roughness: 0.4, metalness: 0.1
+});
+
+function setupInputs() {
+  const rayGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)
+  ]);
+
+  for (let i = 0; i < 2; i++) {
+    const c = S.renderer.xr.getController(i);
+    c.userData = {
+      kind: 'controller', held: null, hasPrev: false,
+      prev: new THREE.Vector3(), vel: new THREE.Vector3(), inputSource: null
+    };
+    const ray = new THREE.Line(rayGeo, new THREE.LineBasicMaterial({
+      color: 0x57e2c4, transparent: true, opacity: 0.6
+    }));
+    ray.scale.z = 1.4;
+    c.add(ray);
+    const tip = new THREE.Mesh(dotGeo, handMat);
+    tip.scale.setScalar(1.2);
+    c.add(tip);
+
+    c.addEventListener('connected', e => {
+      c.userData.inputSource = e.data;
+      // Kéznél a kontroller-sugár csak zavarna.
+      const isHand = !!(e.data && e.data.hand);
+      ray.visible = !isHand;
+      tip.visible = !isHand;
+    });
+    c.addEventListener('disconnected', () => { c.userData.inputSource = null; });
+    c.addEventListener('selectstart', onGrabStart);
+    c.addEventListener('selectend', onGrabEnd);
+    c.addEventListener('squeezestart', onGrabStart);
+    c.addEventListener('squeezeend', onGrabEnd);
+    S.scene.add(c);
+    S.controllers.push(c);
+
+    const h = S.renderer.xr.getHand(i);
+    h.userData = {
+      kind: 'hand', held: null, hasPrev: false, pinching: false,
+      prev: new THREE.Vector3(), vel: new THREE.Vector3(), point: new THREE.Vector3()
+    };
+    h.addEventListener('pinchstart', onPinchStart);
+    h.addEventListener('pinchend', onPinchEnd);
+    S.scene.add(h);
+    S.hands.push(h);
+  }
+}
+
+// A three.js képkockánként tölti fel a hand.joints-ot; amint megjelenik
+// egy ízület, kap egy kis gömböt. 25 ízület kézenként.
+function decorateHand(h) {
+  for (const name in h.joints) {
+    const j = h.joints[name];
+    if (!j.userData.dot) {
+      const dot = new THREE.Mesh(dotGeo, handMat);
+      const r = j.jointRadius || 0.008;
+      dot.scale.setScalar(Math.max(r, 0.004) / 0.01);
+      j.add(dot);
+      j.userData.dot = dot;
+    }
+  }
+}
+
+function pinchPoint(h, out) {
+  const a = h.joints && h.joints['index-finger-tip'];
+  const b = h.joints && h.joints['thumb-tip'];
+  if (a && b && a.visible && b.visible) {
+    out.copy(a.getWorldPosition(tmpV3)).add(b.getWorldPosition(tmpV2)).multiplyScalar(0.5);
+    return true;
+  }
+  return false;
+}
+
+function grabNearest(worldPos, reach) {
+  let best = null, bestD = reach;
+  for (const b of S.bodies) {
+    if (b.held) continue;
+    const d = b.mesh.position.distanceTo(worldPos) - b.r;
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
+}
+
+function onPinchStart(e) {
+  const h = e.target;
+  h.userData.pinching = true;
+  setHandMaterial(h, pinchMat);
+  if (!pinchPoint(h, tmpV)) return;
+  const best = grabNearest(tmpV, 0.12);
+  if (best) {
+    best.held = h;
+    h.userData.held = best;
+    best.vel.set(0, 0, 0);
+  }
+  // Ha nem fogtunk meg semmit, a csippentés telekinézis lesz (lásd step()).
+}
+
+function onPinchEnd(e) {
+  const h = e.target;
+  h.userData.pinching = false;
+  setHandMaterial(h, handMat);
+  release(h);
+}
+
+function setHandMaterial(h, mat) {
+  for (const name in h.joints) {
+    const dot = h.joints[name].userData.dot;
+    if (dot) dot.material = mat;
+  }
+}
+
+function onGrabStart(e) {
+  const c = e.target;
+  if (c.userData.inputSource && c.userData.inputSource.hand) return; // kézzel a pinch dolgozik
+
+  tmpM.identity().extractRotation(c.matrixWorld);
+  raycaster.ray.origin.setFromMatrixPosition(c.matrixWorld);
+  raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpM);
+  const hits = raycaster.intersectObjects(S.panelButtons, false);
+  if (hits.length && hits[0].distance < 3) {
+    runAction(hits[0].object.userData.action, c);
+    return;
+  }
+
+  c.getWorldPosition(tmpV);
+  const best = grabNearest(tmpV, 0.2);
+  if (best) {
+    best.held = c;
+    c.userData.held = best;
+    best.vel.set(0, 0, 0);
+    pulse(c, 0.45, 25);
+  }
+}
+
+function onGrabEnd(e) { release(e.target); }
+
+function release(src) {
+  const b = src.userData.held;
+  if (!b) return;
+  b.vel.copy(src.userData.vel).multiplyScalar(1.15);
+  if (b.vel.length() > 9) b.vel.setLength(9);
+  b.spin.set(src.userData.vel.z * 3, src.userData.vel.x * 3, (Math.random() - .5) * 2);
+  b.held = null;
+  src.userData.held = null;
+  if (src.userData.kind === 'controller') pulse(src, 0.3, 18);
+}
+
+function pulse(c, intensity, ms) {
+  const src = c.userData.inputSource;
+  const act = src && src.gamepad && src.gamepad.hapticActuators && src.gamepad.hapticActuators[0];
+  if (act && act.pulse) { try { act.pulse(intensity, ms); } catch (e) {} }
+}
+
+// ---------- térbeli hang ----------
+// Nincs hangfájl: minden koppanás a helyszínen szintetizálódik,
+// és egy PannerNode teszi oda, ahol az ütközés történt.
+function initAudio() {
+  if (S.audio) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    const ctx = new Ctx();
+    const master = ctx.createGain();
+    master.gain.value = 0.55;
+    master.connect(ctx.destination);
+    S.audio = { ctx, master };
+  } catch (e) { S.audio = null; }
+}
+
+function impact(b, speed) {
+  b.glow = 1;
+  if (!S.audio || S.soundsThisFrame >= 3) return;
+  S.soundsThisFrame++;
+  const { ctx, master } = S.audio;
+  const now = ctx.currentTime;
+
+  const panner = ctx.createPanner();
+  panner.panningModel = 'HRTF';
+  panner.distanceModel = 'inverse';
+  panner.refDistance = 0.5;
+  panner.maxDistance = 20;
+  const p = b.mesh.position;
+  if (panner.positionX) {
+    panner.positionX.value = p.x; panner.positionY.value = p.y; panner.positionZ.value = p.z;
+  } else if (panner.setPosition) {
+    panner.setPosition(p.x, p.y, p.z);
+  }
+
+  // Kisebb tárgy = magasabb hang, gyorsabb becsapódás = hangosabb.
+  const base = 120 + (0.11 - b.r) * 2600;
+  const osc = ctx.createOscillator();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(base, now);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(60, base * 0.55), now + 0.16);
+
+  const gain = ctx.createGain();
+  const vol = Math.min(0.5, 0.06 + speed * 0.07);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(vol, now + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+
+  osc.connect(gain); gain.connect(panner); panner.connect(master);
+  osc.start(now); osc.stop(now + 0.26);
+}
+
+function updateListener(cam) {
+  if (!S.audio) return;
+  const l = S.audio.ctx.listener;
+  cam.getWorldPosition(tmpV);
+  cam.getWorldQuaternion(tmpQ);
+  tmpV2.set(0, 0, -1).applyQuaternion(tmpQ);
+  tmpV3.set(0, 1, 0).applyQuaternion(tmpQ);
+  if (l.positionX) {
+    l.positionX.value = tmpV.x; l.positionY.value = tmpV.y; l.positionZ.value = tmpV.z;
+    l.forwardX.value = tmpV2.x; l.forwardY.value = tmpV2.y; l.forwardZ.value = tmpV2.z;
+    l.upX.value = tmpV3.x; l.upY.value = tmpV3.y; l.upZ.value = tmpV3.z;
+  } else if (l.setPosition) {
+    l.setPosition(tmpV.x, tmpV.y, tmpV.z);
+    l.setOrientation(tmpV2.x, tmpV2.y, tmpV2.z, tmpV3.x, tmpV3.y, tmpV3.z);
+  }
+}
+
+// ---------- térbeli panel ----------
+function labelTexture(text, accent) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 160;
+  const g = c.getContext('2d');
+  g.fillStyle = accent ? '#14342c' : '#161b23';
+  g.fillRect(0, 0, c.width, c.height);
+  g.strokeStyle = accent ? '#57e2c4' : '#33404f';
+  g.lineWidth = 8;
+  g.strokeRect(4, 4, c.width - 8, c.height - 8);
+  g.fillStyle = accent ? '#9ef7e2' : '#dde5ef';
+  g.font = '600 58px Inter, "Segoe UI", system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(text, c.width / 2, c.height / 2 + 4);
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  return tex;
+}
+
+let gravBtn, slowBtn, roomBtn;
+
+function makeButton(text, y, action) {
+  const mat = new THREE.MeshBasicMaterial({ map: labelTexture(text, false), transparent: true });
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.105), mat);
+  mesh.position.set(0, y, 0);
+  mesh.userData.action = action;
+  mesh.userData.cooldown = 0;
+  mesh.userData.setLabel = (t, on) => {
+    mat.map.dispose();
+    mat.map = labelTexture(t, on);
+    mat.needsUpdate = true;
+  };
+  S.panel.add(mesh);
+  S.panelButtons.push(mesh);
+  return mesh;
+}
+
+function buildPanel() {
+  S.panel = new THREE.Group();
+  S.panel.position.set(0.58, 1.25, -0.6);
+  S.panel.rotation.y = -0.5;
+  S.scene.add(S.panel);
+
+  const back = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.4, 0.66),
+    new THREE.MeshBasicMaterial({ color: 0x0b0f14, transparent: true, opacity: 0.72 })
+  );
+  back.position.z = -0.006;
+  S.panel.add(back);
+
+  makeButton('Új tárgy', 0.24, 'spawn');
+  gravBtn = makeButton('Gravitáció be', 0.12, 'gravity');
+  slowBtn = makeButton('Lassítás ki', 0.0, 'slow');
+  roomBtn = makeButton('Szoba be', -0.12, 'room');
+  makeButton('Újraindítás', -0.24, 'reset');
+}
+
+function runAction(action, src) {
+  if (action === 'spawn') { const b = spawn(false); b.vel.set(0, 1.2, 0); }
+  else if (action === 'gravity') {
+    S.gravityOn = !S.gravityOn;
+    gravBtn.userData.setLabel(S.gravityOn ? 'Gravitáció be' : 'Gravitáció ki', !S.gravityOn);
+    if (!S.gravityOn) S.bodies.forEach(b => b.vel.multiplyScalar(0.35));
+  }
+  else if (action === 'slow') {
+    S.timeScale = S.timeScale === 1 ? 0.25 : 1;
+    slowBtn.userData.setLabel(S.timeScale === 1 ? 'Lassítás ki' : 'Lassítás be', S.timeScale !== 1);
+  }
+  else if (action === 'room') {
+    S.showRoom = !S.showRoom;
+    for (const rec of S.planes.values()) rec.mesh.visible = S.showRoom;
+    roomBtn.userData.setLabel(S.showRoom ? 'Szoba be' : 'Szoba ki', !S.showRoom);
+  }
+  else if (action === 'reset') resetScene();
+  if (src && src.userData && src.userData.kind === 'controller') pulse(src, 0.6, 40);
+}
+
+// Ujjheggyel megbökve is működnek a gombok, nemcsak sugárral.
+function pokeButtons(dt) {
+  for (const btn of S.panelButtons) {
+    if (btn.userData.cooldown > 0) btn.userData.cooldown -= dt;
+  }
+  for (const h of S.hands) {
+    const tip = h.joints && h.joints['index-finger-tip'];
+    if (!tip || !tip.visible) continue;
+    tip.getWorldPosition(tmpV);
+    for (const btn of S.panelButtons) {
+      if (btn.userData.cooldown > 0) continue;
+      btn.getWorldPosition(tmpV2);
+      if (tmpV.distanceTo(tmpV2) < 0.075) {
+        btn.userData.cooldown = 0.6;
+        runAction(btn.userData.action, h);
+      }
+    }
+  }
+}
+
+// ---------- élő kijelző ----------
+function buildHud() {
+  S.hudCanvas = document.createElement('canvas');
+  S.hudCanvas.width = 512; S.hudCanvas.height = 128;
+  S.hudCtx = S.hudCanvas.getContext('2d');
+  S.hudTex = new THREE.CanvasTexture(S.hudCanvas);
+  S.hudMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.4, 0.1),
+    new THREE.MeshBasicMaterial({ map: S.hudTex, transparent: true })
+  );
+  S.hudMesh.position.set(0, 0.38, 0);
+  S.panel.add(S.hudMesh);
+}
+
+let hudTimer = 0, fps = 0, fpsAcc = 0, fpsN = 0;
+function updateHud(dt) {
+  fpsAcc += dt; fpsN++;
+  hudTimer -= dt;
+  if (hudTimer > 0) return;
+  hudTimer = 0.25;
+  if (fpsAcc > 0) fps = Math.round(fpsN / fpsAcc);
+  fpsAcc = 0; fpsN = 0;
+
+  const g = S.hudCtx;
+  g.clearRect(0, 0, 512, 128);
+  g.fillStyle = 'rgba(11,15,20,0.8)';
+  g.fillRect(0, 0, 512, 128);
+  g.fillStyle = '#57e2c4';
+  g.font = '600 30px Inter, "Segoe UI", system-ui, sans-serif';
+  g.textAlign = 'left';
+  g.textBaseline = 'middle';
+  const handsOn = S.hands.filter(h => h.joints && h.joints['index-finger-tip']).length;
+  g.fillText(`${S.planes.size} sík · ${S.bodies.length} tárgy`, 22, 40);
+  g.fillStyle = '#9aa7b8';
+  g.font = '500 26px Inter, "Segoe UI", system-ui, sans-serif';
+  g.fillText(`${handsOn} kéz · ${fps} fps`, 22, 88);
+  S.hudTex.needsUpdate = true;
+}
+
+// ---------- fizika ----------
+function trackSource(src, worldPos, dt) {
+  if (src.userData.hasPrev && dt > 0) {
+    tmpV2.copy(worldPos).sub(src.userData.prev).divideScalar(dt);
+    src.userData.vel.lerp(tmpV2, 0.55);
+  }
+  src.userData.prev.copy(worldPos);
+  src.userData.hasPrev = true;
+}
+
+function step(dt) {
+  for (const c of S.controllers) {
+    c.getWorldPosition(tmpV);
+    trackSource(c, tmpV, dt);
+    if (c.userData.held) {
+      c.getWorldPosition(c.userData.held.mesh.position);
+      c.userData.held.mesh.rotateY(dt * 1.2);
+    }
+  }
+
+  for (const h of S.hands) {
+    if (!pinchPoint(h, h.userData.point)) continue;
+    trackSource(h, h.userData.point, dt);
+    if (h.userData.held) {
+      h.userData.held.mesh.position.copy(h.userData.point);
+      h.userData.held.mesh.rotateY(dt * 1.2);
+    } else if (h.userData.pinching) {
+      // Telekinézis: üres csippentés magához húzza a közeli tárgyakat.
+      for (const b of S.bodies) {
+        if (b.held) continue;
+        tmpV.copy(h.userData.point).sub(b.mesh.position);
+        const d = tmpV.length();
+        if (d > 0.02 && d < 1.6) {
+          b.vel.addScaledVector(tmpV.divideScalar(d), (14 / (d + 0.4)) * dt);
+          b.vel.multiplyScalar(0.97);
+          b.glow = Math.max(b.glow, 0.5);
+        }
+      }
+    }
+  }
+
+  for (const b of S.bodies) {
+    if (b.glow > 0) {
+      b.glow = Math.max(0, b.glow - dt * 2.5);
+      b.mat.emissiveIntensity = 0.24 + b.glow * 0.9;
+    }
+    if (b.held) continue;
+
+    if (S.gravityOn) b.vel.y += GRAV * dt;
+    else {
+      b.vel.y += Math.sin(performance.now() * 0.0007 + b.r * 100) * 0.08 * dt;
+      b.vel.multiplyScalar(0.999);
+    }
+
+    b.mesh.position.addScaledVector(b.vel, dt);
+    b.mesh.rotation.x += b.spin.x * dt;
+    b.mesh.rotation.y += b.spin.y * dt;
+    b.mesh.rotation.z += b.spin.z * dt;
+
+    if (S.usingRealRoom) collidePlanes(b);
+    else collideFallback(b);
+  }
+
+  for (let i = 0; i < S.bodies.length; i++) {
+    for (let j = i + 1; j < S.bodies.length; j++) {
+      const a = S.bodies[i], c2 = S.bodies[j];
+      tmpV.copy(c2.mesh.position).sub(a.mesh.position);
+      const dist = tmpV.length();
+      const min = a.r + c2.r;
+      if (dist > 0.00001 && dist < min) {
+        tmpV.divideScalar(dist);
+        const overlap = min - dist;
+        if (!a.held) a.mesh.position.addScaledVector(tmpV, -overlap * (c2.held ? 1 : 0.5));
+        if (!c2.held) c2.mesh.position.addScaledVector(tmpV, overlap * (a.held ? 1 : 0.5));
+        const rel = tmpV2.copy(c2.vel).sub(a.vel).dot(tmpV);
+        if (rel < 0) {
+          const imp = -(1 + REST) * rel / 2;
+          if (!a.held) a.vel.addScaledVector(tmpV, -imp);
+          if (!c2.held) c2.vel.addScaledVector(tmpV, imp);
+          if (-rel > 1.2) impact(a, -rel * 0.5);
+        }
+      }
+    }
+  }
+}
+
+// Ha nincs felismert szoba: sima padló és puha falak, mint az első demóban.
+function collideFallback(b) {
+  if (b.mesh.position.y < b.r) {
+    b.mesh.position.y = b.r;
+    if (b.vel.y < 0) {
+      const speed = -b.vel.y;
+      b.vel.y = -b.vel.y * REST;
+      b.vel.x *= FRICTION; b.vel.z *= FRICTION;
+      b.spin.multiplyScalar(0.8);
+      if (Math.abs(b.vel.y) < 0.35) b.vel.y = 0;
+      if (speed > 0.35) impact(b, speed);
+    }
+  }
+  for (const ax of ['x', 'z']) {
+    const lim = 2.4;
+    if (b.mesh.position[ax] > lim) { b.mesh.position[ax] = lim; b.vel[ax] = -Math.abs(b.vel[ax]) * REST; impact(b, 1); }
+    if (b.mesh.position[ax] < -lim) { b.mesh.position[ax] = -lim; b.vel[ax] = Math.abs(b.vel[ax]) * REST; impact(b, 1); }
+  }
+  if (b.mesh.position.y > 3.2) { b.mesh.position.y = 3.2; b.vel.y = -Math.abs(b.vel.y) * REST; }
+}
+
+// ---------- képkocka ----------
+function tick(time, frame) {
+  const raw = Math.min(S.clock.getDelta(), 0.05);
+  const dt = raw * S.timeScale;
+  S.soundsThisFrame = 0;
+
+  if (frame) {
+    const refSpace = S.renderer.xr.getReferenceSpace();
+    if (refSpace) updatePlanes(frame, refSpace);
+  }
+  for (const h of S.hands) decorateHand(h);
+
+  step(dt);
+  pokeButtons(raw);
+  updateHud(raw);
+
+  if (!S.renderer.xr.isPresenting) {
+    const t = performance.now() * 0.00015;
+    S.camera.position.x = Math.sin(t) * 1.5;
+    S.camera.position.z = Math.cos(t) * 1.5 + 0.3;
+    S.camera.lookAt(0, 1.15, -0.3);
+    updateListener(S.camera);
+  } else {
+    updateListener(S.renderer.xr.getCamera());
+  }
+
+  S.renderer.render(S.scene, S.camera);
+}
+
+function onResize() {
+  S.camera.aspect = innerWidth / innerHeight;
+  S.camera.updateProjectionMatrix();
+  S.renderer.setSize(innerWidth, innerHeight);
+}
+
+// ---------- session ----------
+let inFrame = false;
+try { inFrame = window.self !== window.top; } catch (e) { inFrame = true; }
+
+const ATTEMPTS = [
+  { mode: 'immersive-ar', ar: true,  opts: { optionalFeatures: WANTED } },
+  { mode: 'immersive-ar', ar: true,  opts: undefined },
+  { mode: 'immersive-vr', ar: false, opts: { optionalFeatures: WANTED } },
+  { mode: 'immersive-vr', ar: false, opts: undefined }
+];
+
+function chip(label, state) {
+  return '<span class="cap ' + (state || '') + '">' + label + '</span>';
+}
+
+function renderCaps(list) {
+  capsEl.innerHTML = list.map(([label, state]) => chip(label, state)).join('');
+}
+
+function onSession(session, a) {
+  S.session = session;
+  try {
+    S.granted = session.enabledFeatures ? Array.from(session.enabledFeatures) : [];
+  } catch (e) { S.granted = []; }
+
+  const nice = {
+    'hand-tracking': 'kézkövetés',
+    'plane-detection': 'szobasíkok',
+    'mesh-detection': 'szobaháló',
+    'anchors': 'horgonyok',
+    'hit-test': 'felületteszt',
+    'local-floor': 'padlószint',
+    'bounded-floor': 'játéktér'
+  };
+  const caps = [[a.ar ? 'passthrough (AR)' : 'VR mód', a.ar ? 'on' : 'off']];
+  for (const f of WANTED) {
+    if (!nice[f]) continue;
+    caps.push([nice[f], S.granted.indexOf(f) >= 0 ? 'on' : 'off']);
+  }
+  renderCaps(caps);
+
+  S.fallbackRoom.visible = !a.ar;
+  S.scene.background = null;
+  uiEl.style.display = 'none';
+
+  session.addEventListener('end', () => {
+    S.session = null;
+    S.usingRealRoom = false;
+    S.fallbackRoom.visible = true;
+    uiEl.style.display = 'flex';
+    statusEl.textContent = 'Kiléptél. Bármikor visszamehetsz.';
+  });
+
+  const spaces = ['local-floor', 'local'];
+  (function trySpace(i) {
+    if (i >= spaces.length) { S.renderer.xr.setSession(session); return; }
+    session.requestReferenceSpace(spaces[i]).then(() => {
+      S.renderer.xr.setReferenceSpaceType(spaces[i]);
+      if (spaces[i] === 'local') S.scene.position.y = -1.2;
+      S.renderer.xr.setSession(session);
+    }).catch(() => trySpace(i + 1));
+  })(0);
+}
+
+function attempt(i, lastErr) {
+  if (i >= ATTEMPTS.length) {
+    statusEl.textContent = inFrame
+      ? 'Beágyazott nézetben nincs headset-hozzáférés. Nyisd meg külön fülön.'
+      : 'Nem indult el: ' + (lastErr && lastErr.message ? lastErr.message : 'ismeretlen hiba') +
+        ' — nyomd meg még egyszer a gombot.';
+    return;
+  }
+  const a = ATTEMPTS[i];
+  let p;
+  try {
+    p = a.opts ? navigator.xr.requestSession(a.mode, a.opts) : navigator.xr.requestSession(a.mode);
+  } catch (err) { attempt(i + 1, err); return; }
+  p.then(s => onSession(s, a)).catch(err => attempt(i + 1, err));
+}
+
+function startSession() {
+  if (!navigator.xr) {
+    statusEl.textContent = 'Nincs WebXR ezen a lapon. Nyisd meg a Quest böngészőjében.';
+    return;
+  }
+  initAudio();                       // a hang csak felhasználói gesztusból indulhat
+  if (S.audio && S.audio.ctx.state === 'suspended') S.audio.ctx.resume().catch(() => {});
+  statusEl.textContent = 'Indítás…';
+  attempt(0, null);                  // a requestSession szinkronban, a kattintásból
+}
+
+function allowAnyway(msg) {
+  statusEl.textContent = msg;
+  enterEl.disabled = false;
+}
+
+function probe() {
+  const secure = window.isSecureContext === true;
+  const base = [
+    ['biztonságos kontextus', secure ? 'on' : 'off'],
+    ['WebXR', navigator.xr ? 'on' : 'off'],
+    ['keretben: ' + (inFrame ? 'igen' : 'nem'), inFrame ? 'off' : 'on']
+  ];
+  renderCaps(base);
+
+  if (!navigator.xr) {
+    statusEl.textContent = inFrame
+      ? 'Beágyazott nézetben nincs headset-hozzáférés. Nyisd meg külön fülön.'
+      : 'Ez a böngésző nem támogatja a WebXR-t. Nyisd meg a Quest böngészőjében.';
+    return;
+  }
+
+  let settled = false;
+  setTimeout(() => {
+    if (!settled) allowAnyway('Az ellenőrzés nem válaszolt — próbáld meg a belépést.');
+  }, 2500);
+
+  navigator.xr.isSessionSupported('immersive-ar').then(ar => {
+    if (ar) {
+      settled = true;
+      renderCaps(base.concat([['immersive-ar', 'on']]));
+      statusEl.textContent = 'Quest észlelve — passthrough módban indul.';
+      enterEl.disabled = false;
+      return;
+    }
+    return navigator.xr.isSessionSupported('immersive-vr').then(vr => {
+      settled = true;
+      renderCaps(base.concat([['immersive-ar', 'off'], ['immersive-vr', vr ? 'on' : 'off']]));
+      if (vr) allowAnyway('VR mód elérhető (passthrough nélkül).');
+      else statusEl.textContent = 'Nincs elérhető headset ezen az eszközön.';
+    });
+  }).catch(err => {
+    settled = true;
+    allowAnyway('Ellenőrzési hiba: ' + err.message + ' — próbáld meg a belépést.');
+  });
+}
+
+try {
+  init();
+  probe();
+} catch (err) {
+  statusEl.textContent = 'Indítási hiba: ' + err.message;
+  console.error(err);
+}
+
+enterEl.addEventListener('click', startSession);
+</script>
+</body>
+</html>

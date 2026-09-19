@@ -118,6 +118,28 @@ python3 -m http.server 8080 --bind 127.0.0.1
 
 ---
 
+## A két demó
+
+| cím | mi van benne |
+|---|---|
+| `/` | az eredeti demó — fizika, megfogás, térbeli panel |
+| `/lab` | **Szobalabor**: kézkövetés, a valódi szoba síkjai, térbeli hang |
+
+A `lab/` a Quest 3 fejlettebb WebXR-képességeit használja, mindet
+*opcionálisan*: nincs egyetlen `requiredFeature` sem, így ha valamelyik nem
+érhető el, a demó attól még elindul, csak az a funkció marad ki.
+
+- **kézkövetés** (`hand-tracking`) — csippentés a megfogáshoz, üres csippentés
+  telekinézis; a gombokat ujjheggyel meg lehet bökni
+- **szobasíkok** (`plane-detection`) — a `frame.detectedPlanes`-ből valódi
+  ütközőfelület lesz, a tárgyak a te falaidról pattannak vissza
+- **térbeli hang** — nincs hangfájl, minden koppanás a helyszínen
+  szintetizálódik, és egy `PannerNode` teszi oda, ahol történt
+
+A panel fölötti kijelző élőben mutatja a felismert síkok és tárgyak számát,
+a követett kezeket és az fps-t. A belépés előtti sor pedig kiírja, melyik
+képességet adta meg ténylegesen a rendszer.
+
 ## Ellenőrzés
 
 Nyisd meg a `/check.html`-t a headsetben. Ha mindhárom érték zöld, az origó
