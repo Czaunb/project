@@ -304,6 +304,45 @@ Bűncselekmény nélkül a szint magától lecseng.
 15 perces nappal–éjszaka kör: mozgó nap, alkonyi színek, csillagok,
 kigyulladó ablakok és utcalámpák. A B/Y gombbal azonnal váltható.
 
+### Második bővítés: látvány, élet, funkciók
+
+**A legnagyobb felismerés: a város üres volt.** 130 autó szétszórva 968
+méteren azt jelentette, hogy nyolc utcaszakaszonként jutott egy — 90 méteren
+belül összesen 13 objektum. Ezért érződött élettelennek.
+
+A megoldás az, amit a nyílt világú játékok is csinálnak: aki túl messzire
+kerül, azt **visszatesszük a játékos köré**. Ugyanannyi objektumból így
+90 méteren belül **273** lett (91 autó, 182 robot) — húszszoros sűrűség.
+Mellé a létszám is nőtt: 190 autó, 260 robot.
+
+**Látvány**
+- **kontaktárnyék** minden autó, robot és rendőr alatt — ettől nem lebegnek
+- **eső**: 2200 csepp, nedves és tükröző aszfalt, **villámlás** mennydörgéssel
+- utcai fák, padok, tűzcsapok, kukák, **buszmegállók** a sugárutak járdáin
+- **óriásplakátok** a felhőkarcolók tetején
+- minden épület **más ablakmintázattal** világít éjjel (UV-eltolás)
+
+**Élet**
+- **működő jelzőlámpák** a sugárutak kereszteződéseiben: az észak-déli és a
+  kelet-nyugati irány felváltva kap zöldet, sárgával a váltás előtt — és a
+  forgalom tényleg megáll a piroson
+- **élethű járás**: a lábak és a karok lengenek, vertex shaderben számolva,
+  példányonként eltérő fázissal
+- **rendőrautók** két csillagtól: üldöznek, villognak és lőnek menet közben
+
+**Funkciók**
+- **küldetések**: futár (3 pont, 52 mp), verseny (5 pont, 70 mp) és
+  menekülés (rázd le a rendőrséget). Sárga jelzőoszlop mutatja a célt, a
+  minitérképen nyíl vezet oda, és fizetnek érte kreditben.
+- kredit, küldetés-visszaszámláló és rendőrautók a kijelzőn
+
+Terhelés alatt mindennel bekapcsolva: **27 rajzolási hívás, 236 300
+háromszög.**
+
+Ellenőrzés: 25 viselkedés, köztük a lámpaciklus, a piroson megállás, az eső
+és a nedves aszfalt, a villám, a járás-shader, a rendőrautó üldözése, a
+három küldetéstípus teljesítése, bukása és kifizetése.
+
 ### Utólag javított hibák (headsetes visszajelzés után)
 
 **A fő hiba: 180 fokkal el voltál fordítva az autóban.** A kamerák a `-Z`

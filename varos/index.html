@@ -65,6 +65,8 @@
     <span class="key">Markolat</span><span>Beszállás a közeli autóba / kiszállás · újratöltés</span>
     <span class="key">A / X</span><span>Fegyverváltás</span>
     <span class="key">B / Y</span><span>Nappal–éjszaka váltás</span>
+    <span class="key">Bal kar benyomva</span><span>Eső be és ki</span>
+    <span class="key">Sárga oszlop</span><span>Meló felvétele — futár, verseny, menekülés</span>
   </div>
   <div id="prog"></div>
   <div id="caps"></div>
@@ -112,8 +114,10 @@ const CFG={
   walk:1.5, run:2.9, accel:9.0,
   snapDeg:45, snapFade:0.09, snapCd:0.22,
   vigMax:0.6, vigSpeed:6.0, deadzone:0.18, eye:1.62,
-  traffic:130,          // egyszerre élő forgalmi autó
-  peds:150,             // járókelő robot
+  traffic:190,          // egyszerre élő forgalmi autó
+  peds:260,             // járókelő robot
+  recycleCar:170,       // ennél messzebb kerülve a játékos köré rakjuk vissza
+  recyclePed:110,
   drawDist:330,
   maxBullets:200, maxEnemyShots:140, maxParticles:1600,
   seatDrop:-0.45,       // ennyivel ülsz lejjebb az autóban
@@ -145,7 +149,8 @@ const S={
   sun:null,sunTarget:null,hemi:null,sky:null,skyMat:null,
   time:0.34,              // 0..1 napszak (0.34 ≈ reggel)
   night:0,
-  hp:100,score:0,kills:0,iFrame:0,baseY:0,
+  hp:100,score:0,kills:0,iFrame:0,baseY:0,money:0,
+  rain:0,rainTarget:0,bolt:0,boltT:6,lightT:0,lightHeads:[],mission:null,jobCd:0,
   hud:null,banner:null,minimap:null,
   audio:null,music:null,sfxN:0,
   phase:'menu',granted:[],session:null,stats:{calls:0,fps:0,tris:0},
@@ -173,27 +178,28 @@ function mFinish(M){
   return g;
 }
 // négy sarok + normális + UV-tartomány
-function quad(M,ax,ay,az,bx,by,bz,cx,cy,cz,dx,dy,dz,nx,ny,nz,uw,uh,r,gn,bl){
+function quad(M,ax,ay,az,bx,by,bz,cx,cy,cz,dx,dy,dz,nx,ny,nz,uw,uh,r,gn,bl,uo,vo){
   const v=M.v;
+  const u0=uo||0, v0=vo||0;
   M.p.push(ax,ay,az,bx,by,bz,cx,cy,cz,dx,dy,dz);
   for(let k=0;k<4;k++){M.n.push(nx,ny,nz);M.c.push(r,gn,bl);}
-  M.u.push(0,0, uw,0, uw,uh, 0,uh);
+  M.u.push(u0,v0, u0+uw,v0, u0+uw,v0+uh, u0,v0+uh);
   M.i.push(v,v+1,v+2, v,v+2,v+3);
   M.v+=4;
 }
 // tengelyhez igazított doboz; az UV a valós mérethez skálázódik (tile méterben)
-function box(M,cx,cy,cz,sx,sy,sz,color,tile,skipTop,skipBottom){
+function box(M,cx,cy,cz,sx,sy,sz,color,tile,skipTop,skipBottom,uo,vo){
   const hx=sx/2,hy=sy/2,hz=sz/2;
   const x0=cx-hx,x1=cx+hx,y0=cy-hy,y1=cy+hy,z0=cz-hz,z1=cz+hz;
   _col.setHex(color); const r=_col.r,g=_col.g,b=_col.b;
   const t=tile||1;
   const uX=sx/t,uY=sy/t,uZ=sz/t;
-  quad(M,x0,y0,z1, x1,y0,z1, x1,y1,z1, x0,y1,z1,  0,0,1,  uX,uY,r,g,b);   // +Z
-  quad(M,x1,y0,z0, x0,y0,z0, x0,y1,z0, x1,y1,z0,  0,0,-1, uX,uY,r,g,b);   // -Z
-  quad(M,x1,y0,z1, x1,y0,z0, x1,y1,z0, x1,y1,z1,  1,0,0,  uZ,uY,r,g,b);   // +X
-  quad(M,x0,y0,z0, x0,y0,z1, x0,y1,z1, x0,y1,z0, -1,0,0,  uZ,uY,r,g,b);   // -X
-  if(!skipTop)    quad(M,x0,y1,z1, x1,y1,z1, x1,y1,z0, x0,y1,z0, 0,1,0,  uX,uZ,r,g,b);
-  if(!skipBottom) quad(M,x0,y0,z0, x1,y0,z0, x1,y0,z1, x0,y0,z1, 0,-1,0, uX,uZ,r,g,b);
+  quad(M,x0,y0,z1, x1,y0,z1, x1,y1,z1, x0,y1,z1,  0,0,1,  uX,uY,r,g,b,uo,vo);
+  quad(M,x1,y0,z0, x0,y0,z0, x0,y1,z0, x1,y1,z0,  0,0,-1, uX,uY,r,g,b,uo,vo);
+  quad(M,x1,y0,z1, x1,y0,z0, x1,y1,z0, x1,y1,z1,  1,0,0,  uZ,uY,r,g,b,uo,vo);
+  quad(M,x0,y0,z0, x0,y0,z1, x0,y1,z1, x0,y1,z0, -1,0,0,  uZ,uY,r,g,b,uo,vo);
+  if(!skipTop)    quad(M,x0,y1,z1, x1,y1,z1, x1,y1,z0, x0,y1,z0, 0,1,0,  uX,uZ,r,g,b,uo,vo);
+  if(!skipBottom) quad(M,x0,y0,z0, x1,y0,z0, x1,y0,z1, x0,y0,z1, 0,-1,0, uX,uZ,r,g,b,uo,vo);
 }
 // vízszintes lap (út, járda, tető)
 function plate(M,cx,cz,sx,sz,y,color,tile){
@@ -339,14 +345,15 @@ function buildCity(){
           const H=floors*CITY.floorH;
           const tint=dist.tint[Math.floor(h2(i,j,130+k)*dist.tint.length)];
 
-          box(wallM,px,H/2,pz,w,H,d2,tint,TILE,true,true);
+          const uo=h2(i,j,310+k)*8, vo=h2(i,j,320+k)*8;   // más-más ablakmintázat
+          box(wallM,px,H/2,pz,w,H,d2,tint,TILE,true,true,uo,vo);
           plate(roofM,px,pz,w,d2,H,0x2b2f34,TILE);
 
           // magas házaknál visszahúzott felső rész
           if(floors>8){
             const H2=Math.floor(floors*(0.22+h2(i,j,140+k)*0.3))*CITY.floorH;
             const w2=w*0.62, d3=d2*0.62;
-            box(wallM,px,H+H2/2,pz,w2,H2,d3,tint,TILE,true,true);
+            box(wallM,px,H+H2/2,pz,w2,H2,d3,tint,TILE,true,true,uo,vo+3.1);
             plate(roofM,px,pz,w2,d3,H+H2,0x2b2f34,TILE);
             // antenna
             if(h2(i,j,150+k)>0.55) box(roofM,px,H+H2+3,pz,0.25,6,0.25,0x555b63,TILE);
@@ -360,6 +367,14 @@ function buildCity(){
               const ux=px+(h2(i,j,170+k+u)-0.5)*w*0.55, uz=pz+(h2(i,j,180+k+u)-0.5)*d2*0.55;
               const uh=1.0+h2(i,j,190+k+u)*1.4;
               box(roofM,ux,H+uh/2,uz,1.8+h2(i,j,200+k+u)*1.6,uh,1.6+h2(i,j,210+k+u)*1.4,0x3a3f46,TILE);
+            }
+            if(floors>=10&&h2(i,j,330+k)>0.55){        // óriásplakát a tetőn
+              const BB=[0xff2d7a,0x2df0ff,0xffd93d,0x7cff4d,0xb84dff,0xff6a2d];
+              const bc=BB[Math.floor(h2(i,j,340+k)*BB.length)];
+              const bw2=Math.min(w*0.95,9), bh2=3.4;
+              box(roofM,px,H+0.5+bh2/2,pz,bw2+0.5,bh2+0.5,0.35,0x1a1d22,TILE);
+              box(neonM,px,H+0.5+bh2/2,pz-0.22,bw2,bh2,0.12,bc,TILE);
+              for(const e of [-1,1]) box(roofM,px+e*bw2*0.4,H+0.25,pz,0.2,0.5,0.4,0x2a2f36,TILE);
             }
             if(h2(i,j,220+k)>0.6){                     // víztartály
               box(roofM,px+w*0.28,H+2.2,pz-d2*0.28,1.9,1.5,1.9,0x4a3f34,TILE);
@@ -407,6 +422,53 @@ function buildCity(){
     }
   }
 
+  // --- utcabútor a sugárutak járdáin: ettől lesz sűrű a város ---
+  for(let i=0;i<=CITY.blocks;i+=CITY.avenueEvery){
+    const ax=nodeX(i), off=roadW(i)/2+CITY.walk*0.55;
+    for(let m=0;m<CITY.blocks*3;m++){
+      const t=-WORLD/2+m*(CITY.block/3)+6;
+      for(const sgn of [1,-1]){
+        const kind=Math.floor(h2(i,m,400+sgn)*100)%5;
+        const put=(X,Z)=>{
+          if(kind===0){                                     // utcai fa
+            box(parkM,X,1.15,Z,0.34,2.3,0.34,0x4a3a2c,TILE);
+            box(parkM,X,3.1,Z,2.5,2.4,2.5,0x365c33,TILE);
+            box(parkM,X,3.9,Z,1.7,1.7,1.7,0x3f6a3a,TILE);
+            box(parkM,X,0.2,Z,1.3,0.12,1.3,0x2b2b26,TILE,false,true);
+          }else if(kind===1){                                // pad
+            box(parkM,X,0.52,Z,1.7,0.09,0.52,0x6b4f35,TILE);
+            box(parkM,X,0.80,Z-0.22,1.7,0.5,0.08,0x6b4f35,TILE);
+            for(const e of [-0.72,0.72]) box(parkM,X+e,0.3,Z,0.09,0.45,0.45,0x3a3f46,TILE);
+          }else if(kind===2){                                // tűzcsap
+            box(parkM,X,0.38,Z,0.26,0.62,0.26,0xc42b2b,TILE);
+            box(parkM,X,0.74,Z,0.34,0.12,0.34,0xc42b2b,TILE);
+          }else if(kind===3){                                // kuka
+            box(parkM,X,0.45,Z,0.52,0.9,0.52,0x38414a,TILE);
+            box(parkM,X,0.93,Z,0.60,0.07,0.60,0x222a31,TILE);
+          }else{                                             // buszmegálló
+            box(parkM,X,1.35,Z,3.2,0.12,1.5,0x2a323c,TILE);
+            for(const e of [-1.45,1.45]) box(parkM,X+e,0.68,Z-0.6,0.1,1.35,0.1,0x2a323c,TILE);
+            box(parkM,X,0.9,Z-0.68,3.2,1.8,0.06,0x1c2530,TILE);
+            box(parkM,X,0.52,Z+0.2,2.2,0.08,0.45,0x6b4f35,TILE);
+          }
+        };
+        put(ax+sgn*off, t);
+        put(t, ax+sgn*off);
+      }
+    }
+  }
+
+  // jelzőlámpa-oszlopok
+  for(let i=0;i<=CITY.blocks;i+=CITY.avenueEvery){
+    for(let j=0;j<=CITY.blocks;j+=CITY.avenueEvery){
+      const x=nodeX(i), z=nodeX(j), rw=roadW(i)/2+1.1, rz=roadW(j)/2+1.1;
+      for(const sp of [[x+rw,z+rz],[x-rw,z-rz],[x+rw,z-rz],[x-rw,z+rz]]){
+        box(parkM,sp[0],1.75,sp[1],0.16,3.5,0.16,0x3d444c,TILE);
+        box(parkM,sp[0],3.95,sp[1],0.42,1.0,0.36,0x2a3036,TILE);
+      }
+    }
+  }
+
   // zebra a sugárutak kereszteződéseinél
   for(let i=0;i<=CITY.blocks;i+=CITY.avenueEvery){
     for(let j=0;j<=CITY.blocks;j+=CITY.avenueEvery){
@@ -427,6 +489,7 @@ function buildCity(){
     emissive:0xffffff,emissiveIntensity:0,vertexColors:true,roughness:0.82,metalness:0.06});
   const roofMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.9,metalness:0.05});
   const groundMat=new THREE.MeshStandardMaterial({map:roadTex,vertexColors:true,roughness:0.95,metalness:0.0});
+  S.groundMat=groundMat;
   const markMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.6});
   const parkMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.95});
 
@@ -500,6 +563,23 @@ function validDir(i,j,di,dj){
   const ni=i+di,nj=j+dj;
   return ni>=0&&ni<=CITY.blocks&&nj>=0&&nj<=CITY.blocks;
 }
+// A nagy város miatt a szétszórt forgalom messze kerül és üresnek tűnik az
+// utca. Aki túl messzire jut, azt a játékos köré tesszük vissza — így
+// mindig zsúfolt a környék, ugyanannyi objektumból.
+function recycleNear(e,minD,maxD){
+  const pi=Math.round((S.head.x+WORLD/2)/CITY.block);
+  const pj=Math.round((S.head.z+WORLD/2)/CITY.block);
+  for(let tr=0;tr<12;tr++){
+    const r=minD+Math.random()*(maxD-minD), a=Math.random()*Math.PI*2;
+    const i=Math.max(0,Math.min(CITY.blocks,pi+Math.round(Math.sin(a)*r/CITY.block)));
+    const j=Math.max(0,Math.min(CITY.blocks,pj+Math.round(Math.cos(a)*r/CITY.block)));
+    const d=randomDir(i,j,0,0);
+    if(!validDir(i,j,d[0],d[1])) continue;
+    e.i=i;e.j=j;e.di=d[0];e.dj=d[1];e.t=Math.random();
+    return true;
+  }
+  return false;
+}
 function randomDir(i,j,fromDi,fromDj){
   const opts=[[1,0],[-1,0],[0,1],[0,-1]].filter(d=>
     validDir(i,j,d[0],d[1]) && !(d[0]===-fromDi&&d[1]===-fromDj));
@@ -511,6 +591,58 @@ function randomDir(i,j,fromDi,fromDj){
 //  UTCABÚTOR — lámpák, jelzőlámpák (mind instancelve)
 // ============================================================
 function geoFrom(fn){ const M=Mesher(); fn(M); return mFinish(M); }
+
+// A sugárutak kereszteződéseiben működő jelzőlámpák. Az észak-déli és a
+// kelet-nyugati irány felváltva kap zöldet, sárgával a váltás előtt.
+const LIGHT_CYCLE=[['ns',11],['nsY',2.2],['ew',11],['ewY',2.2]];
+function lightPhase(){
+  let total=0; for(const p of LIGHT_CYCLE) total+=p[1];
+  let t=S.lightT%total;
+  for(const p of LIGHT_CYCLE){ if(t<p[1]) return p[0]; t-=p[1]; }
+  return 'ns';
+}
+function greenFor(di,dj){
+  const ph=lightPhase();
+  const ns=(dj!==0);
+  if(ph==='ns') return ns;
+  if(ph==='ew') return !ns;
+  if(ph==='nsY') return ns?'y':false;
+  return ns?false:'y';
+}
+function buildLights(){
+  const lampGeo=geoFrom(M=>{
+    box(M,0,0.36,0,0.30,0.72,0.26,0xffffff,TILE);       // a lámpatest — a példányszín adja
+  });
+  const mat=new THREE.MeshBasicMaterial({vertexColors:true,toneMapped:false});
+  const im=new THREE.InstancedMesh(lampGeo,mat,140);
+  im.frustumCulled=false;im.count=0;S.scene.add(im);
+  S.lightHeads=[];S.lightMesh=im;S.lightHeadMat=mat;
+  for(let i=0;i<=CITY.blocks;i+=CITY.avenueEvery){
+    for(let j=0;j<=CITY.blocks;j+=CITY.avenueEvery){
+      const x=nodeX(i), z=nodeX(j), rw=roadW(i)/2+1.1, rz=roadW(j)/2+1.1;
+      const spots=[[x+rw,z+rz,0,1],[x-rw,z-rz,0,-1],[x+rw,z-rz,1,0],[x-rw,z+rz,-1,0]];
+      for(const sp of spots) S.lightHeads.push({x:sp[0],z:sp[1],di:sp[2],dj:sp[3]});
+    }
+  }
+}
+function updateLights(dt){
+  S.lightT+=dt;
+  const im=S.lightMesh;if(!im)return;
+  let n=0;
+  for(const h of S.lightHeads){
+    if(n>=im.instanceMatrix.count)break;
+    if(Math.abs(h.x-S.head.x)>150||Math.abs(h.z-S.head.z)>150)continue;
+    _m.identity();_m.elements[12]=h.x;_m.elements[13]=3.55;_m.elements[14]=h.z;
+    im.setMatrixAt(n,_m);
+    const g=greenFor(h.di,h.dj);
+    _col.setHex(g===true?0x35e06a:(g==='y'?0xffc02a:0xff3546));
+    im.setColorAt(n,_col);
+    n++;
+  }
+  im.count=n;
+  im.instanceMatrix.needsUpdate=true;
+  if(im.instanceColor)im.instanceColor.needsUpdate=true;
+}
 
 function buildProps(){
   // lámpaoszlop
@@ -667,7 +799,7 @@ function updateTraffic(dt){
   // sávfoglaltság: melyik autó hol tart ugyanazon az élen
   const buckets=new Map();
   for(const c of S.cars){
-    if(!c.alive||c.player) continue;
+    if(!c.alive||c.player||c.chase) continue;
     const key=c.i+'|'+c.j+'|'+c.di+'|'+c.dj;
     let arr=buckets.get(key); if(!arr){arr=[];buckets.set(key,arr);}
     arr.push(c);
@@ -682,8 +814,13 @@ function updateTraffic(dt){
         const gap=(ahead.t-c.t)*carEdgeLen(c);
         if(gap<9) target=Math.min(target,Math.max(0,ahead.speed*0.85-(9-gap)*0.9));
       }
-      // kereszteződés előtt lassítás
+      // kereszteződés előtt lassítás, piroson megállás
       if(c.t>0.86) target=Math.min(target,6.5);
+      const ni=c.i+c.di, nj=c.j+c.dj;
+      if(c.t>0.80 && ni%CITY.avenueEvery===0 && nj%CITY.avenueEvery===0){
+        const g=greenFor(c.di,c.dj);
+        if(g!==true){ target=0; if(c.t>0.93) c.t=0.93; }
+      }
       // a játékos elől kikerülés/fékezés
       _a.copy(S.head); _a.y=0;
       if(c.pos.distanceTo(_a)<9) target=Math.min(target,3.0);
@@ -699,6 +836,8 @@ function updateTraffic(dt){
       laneP(c.i,c.j,c.di,c.dj,c.t,1,c.pos);
       c.head=Math.atan2(c.di,c.dj);
       carRunOver(c,dt);
+      if(Math.abs(c.pos.x-S.head.x)>CFG.recycleCar||Math.abs(c.pos.z-S.head.z)>CFG.recycleCar)
+        recycleNear(c,55,150);
     }
   }
   drawCars();
@@ -858,10 +997,33 @@ function pedGeo(){
     box(M, 0.13,0.28,0,0.16,0.56,0.16,0x9aa3b0,TILE);
   });
 }
+function walkShader(mat,speedScale){
+  mat.onBeforeCompile=sh=>{
+    sh.uniforms.uT={value:0};
+    sh.vertexShader='uniform float uT;\nattribute float aPhase;\nvarying float vNo;\n'+
+      sh.vertexShader.replace('#include <begin_vertex>',
+      `#include <begin_vertex>
+       float ph=aPhase+uT*${speedScale.toFixed(1)};
+       if(transformed.y<0.62){                      // lábak
+         float sd=transformed.x>0.0?0.0:3.14159;
+         transformed.z+=sin(ph+sd)*0.30*(0.62-transformed.y);
+       } else if(transformed.y<1.32&&abs(transformed.x)>0.20){   // karok
+         float sd2=transformed.x>0.0?3.14159:0.0;
+         transformed.z+=sin(ph+sd2)*0.13;
+       }
+       transformed.y+=abs(sin(ph))*0.035;`);
+    mat.userData.sh=sh;
+  };
+}
 function buildPeds(){
   const geo=pedGeo();
   const mat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.55,metalness:0.35,
     emissive:0x000000,emissiveIntensity:0});
+  walkShader(mat,7.0);
+  const phases=new Float32Array(CFG.peds+40);
+  for(let i=0;i<phases.length;i++) phases[i]=Math.random()*6.283;
+  geo.setAttribute('aPhase',new THREE.InstancedBufferAttribute(phases,1));
+  S.pedMat=mat;
   const im=new THREE.InstancedMesh(geo,mat,CFG.peds+40);
   im.frustumCulled=false; im.count=0;
   S.scene.add(im);
@@ -913,6 +1075,8 @@ function updatePeds(dt){
         const d=randomDir(p.i,p.j,p.di,p.dj); p.di=d[0]; p.dj=d[1];
       }
     }
+    if(Math.abs(p.pos.x-S.head.x)>CFG.recyclePed||Math.abs(p.pos.z-S.head.z)>CFG.recyclePed)
+      recycleNear(p,18,95);
     p.head=Math.atan2(p.di,p.dj);
     // közelről feléd fordul
     const dp=p.pos.distanceTo(_d);
@@ -1028,6 +1192,105 @@ function stepParts(dt){
 }
 
 // ============================================================
+//  KONTAKTÁRNYÉK — ettől nem lebegnek a dolgok
+// ============================================================
+function shadowTex(){
+  const N=128,c=document.createElement('canvas');c.width=c.height=N;
+  const g=c.getContext('2d');
+  const gr=g.createRadialGradient(N/2,N/2,2,N/2,N/2,N/2);
+  gr.addColorStop(0,'rgba(0,0,0,0.62)');
+  gr.addColorStop(0.55,'rgba(0,0,0,0.30)');
+  gr.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle=gr;g.fillRect(0,0,N,N);
+  return new THREE.CanvasTexture(c);
+}
+function buildShadows(){
+  const geo=new THREE.PlaneGeometry(1,1);geo.rotateX(-Math.PI/2);
+  const mat=new THREE.MeshBasicMaterial({map:shadowTex(),transparent:true,depthWrite:false,
+    opacity:0.85,blending:THREE.NormalBlending});
+  const im=new THREE.InstancedMesh(geo,mat,620);
+  im.frustumCulled=false;im.count=0;im.renderOrder=2;
+  S.scene.add(im);
+  S.shadowMesh=im;S.shadowMat=mat;
+}
+function drawShadows(){
+  const im=S.shadowMesh;if(!im)return;
+  let n=0;const cap=im.instanceMatrix.count;
+  const put=(x,z,sx,sz)=>{
+    if(n>=cap)return;
+    if(Math.abs(x-S.head.x)>90||Math.abs(z-S.head.z)>90)return;
+    _m.identity();
+    _m.elements[0]=sx;_m.elements[10]=sz;
+    _m.elements[12]=x;_m.elements[13]=0.06;_m.elements[14]=z;
+    im.setMatrixAt(n++,_m);
+  };
+  for(const c of S.cars){ if(c.alive) put(c.pos.x,c.pos.z,c.kind===1?3.6:3.2,c.kind===1?6.4:5.6); }
+  for(const p of S.peds){ if(p.alive) put(p.pos.x,p.pos.z,1.25,1.25); }
+  for(const k of S.cops){ if(k.alive) put(k.pos.x,k.pos.z,1.35,1.35); }
+  im.count=n;
+  im.instanceMatrix.needsUpdate=true;
+  // felhős/esős időben és éjjel halványabb
+  S.shadowMat.opacity=0.85*(1-S.night*0.75)*(1-S.rain*0.55);
+}
+
+// ============================================================
+//  IDŐJÁRÁS — eső, nedves aszfalt, villámlás
+// ============================================================
+function buildRain(){
+  const geo=new THREE.BoxGeometry(0.018,0.62,0.018);
+  const mat=new THREE.MeshBasicMaterial({color:0xaac6df,transparent:true,opacity:0.42,
+    blending:THREE.AdditiveBlending,depthWrite:false});
+  const N=2600;
+  const im=new THREE.InstancedMesh(geo,mat,N);
+  im.frustumCulled=false;im.count=0;im.renderOrder=7;
+  S.scene.add(im);
+  const d=new Float32Array(N*3);
+  for(let i=0;i<N;i++){
+    d[i*3]=(Math.random()-0.5)*54; d[i*3+1]=Math.random()*26; d[i*3+2]=(Math.random()-0.5)*54;
+  }
+  S.rainMesh=im;S.rainMat=mat;S.rainData=d;S.rainN=N;
+}
+function updateRain(dt){
+  const im=S.rainMesh;if(!im)return;
+  if(S.rain<0.02){ im.count=0; return; }
+  const d=S.rainData, N=S.rainN;
+  const cnt=Math.floor(N*S.rain);
+  const fall=26*dt, drift=3.2*dt;
+  for(let i=0;i<cnt;i++){
+    d[i*3+1]-=fall; d[i*3]+=drift*0.4;
+    if(d[i*3+1]<0){ d[i*3+1]=24+Math.random()*4;
+      d[i*3]=(Math.random()-0.5)*54; d[i*3+2]=(Math.random()-0.5)*54; }
+    _m.identity();
+    _m.elements[5]=1+S.rain*0.8;
+    _m.elements[12]=S.head.x+d[i*3];
+    _m.elements[13]=d[i*3+1];
+    _m.elements[14]=S.head.z+d[i*3+2];
+    im.setMatrixAt(i,_m);
+  }
+  im.count=cnt;
+  im.instanceMatrix.needsUpdate=true;
+  S.rainMat.opacity=0.18+S.rain*0.34;
+
+  // villámlás
+  S.boltT-=dt;
+  if(S.boltT<=0&&S.rain>0.45){
+    S.boltT=4+Math.random()*11;
+    S.bolt=1;
+    sfx('thunder',S.head,0.55);
+  }
+  if(S.bolt>0) S.bolt=Math.max(0,S.bolt-dt*3.2);
+}
+function setWeather(v){
+  S.rainTarget=v;
+  if(S.groundMat){
+    // nedves aszfalt: sötétebb és fényesebb
+    S.groundMat.roughness=0.95-v*0.62;
+    S.groundMat.metalness=v*0.35;
+  }
+  banner(v>0.5?'ESIK':'KITISZTULT','','#4fd8e6',1.4);
+}
+
+// ============================================================
 //  HANG
 // ============================================================
 function initAudio(){
@@ -1108,6 +1371,7 @@ function sfx(kind,p,vol){
     case 'door':   tone(d,'square',260,180,t,0.07,v*0.5);nz(d,t,0.08,v*0.35,'lowpass',1400); break;
     case 'crash':  tone(d,'sine',110,40,t,0.28,v);nz(d,t,0.34,v*0.9,'bandpass',1700,400,1.1); break;
     case 'siren':  tone(d,'sine',760,1180,t,0.45,v*0.4,true);tone(d,'sine',1180,760,t+0.45,0.45,v*0.4,true); break;
+    case 'thunder':tone(d,'sine',70,28,t,1.6,v,true);nz(d,t,1.8,v*0.8,'lowpass',900,60);break;
     case 'star':   tone(d,'triangle',700,1050,t,0.12,v*0.55);tone(d,'triangle',1050,1570,t+0.1,0.16,v*0.5); break;
   }
 }
@@ -1389,9 +1653,15 @@ function copGeo(){
   });
 }
 function buildCops(){
-  const im=new THREE.InstancedMesh(copGeo(),
-    new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.5,metalness:0.4,
-      emissive:0x223a66,emissiveIntensity:0.3}),24);
+  const cg=copGeo();
+  const cm=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.5,metalness:0.4,
+    emissive:0x223a66,emissiveIntensity:0.3});
+  walkShader(cm,9.0);
+  const cph=new Float32Array(24);
+  for(let i=0;i<24;i++) cph[i]=Math.random()*6.283;
+  cg.setAttribute('aPhase',new THREE.InstancedBufferAttribute(cph,1));
+  S.copMat=cm;
+  const im=new THREE.InstancedMesh(cg,cm,24);
   im.frustumCulled=false;im.count=0;S.scene.add(im);
   S.copMesh=im;
 }
@@ -1421,6 +1691,8 @@ function updateWanted(dt){
   const want=S.wanted*CFG.copPerStar;
   const live=S.cops.filter(c=>c.alive).length;
   if(live<want && Math.random()<dt*1.4) spawnCop();
+  if(S.wanted>=2 && Math.random()<dt*0.5) spawnCopCar();
+  if(S.wanted===0) for(const c of S.cars) if(c.chase) c.alive=false;
   if(S.wanted===0){ for(const c of S.cops) if(c.alive&&c.pos.distanceTo(S.head)>70) c.alive=false; }
   if(S.wanted>0&&Math.random()<dt*0.5) sfx('siren',S.head,0.2);
 }
@@ -1471,6 +1743,163 @@ function updateCops(dt){
   im.count=used;
   im.instanceMatrix.needsUpdate=true;
   if(im.instanceColor)im.instanceColor.needsUpdate=true;
+}
+
+// ============================================================
+//  RENDŐRAUTÓK — kettő csillagtól üldöznek
+// ============================================================
+function buildCopBars(){
+  const geo=geoFrom(M=>{ box(M,0,0,0,1.15,0.16,0.34,0xffffff,TILE); });
+  const mat=new THREE.MeshBasicMaterial({vertexColors:true,toneMapped:false});
+  const im=new THREE.InstancedMesh(geo,mat,10);
+  im.frustumCulled=false;im.count=0;S.scene.add(im);
+  S.copBar=im;S.copBarMat=mat;
+}
+function spawnCopCar(){
+  if(S.cars.filter(c=>c.chase&&c.alive).length>=4) return;
+  const ang=Math.random()*Math.PI*2, d=60+Math.random()*30;
+  const lim=WORLD/2-10;
+  const car={kind:0,i:0,j:0,di:0,dj:1,t:0,speed:0,want:0,col:0x1b2740,
+    pos:new THREE.Vector3(Math.max(-lim,Math.min(lim,S.head.x+Math.sin(ang)*d)),0,
+                          Math.max(-lim,Math.min(lim,S.head.z+Math.cos(ang)*d))),
+    head:ang,player:false,hp:34,alive:true,cop:true,chase:true,brake:0,bar:0};
+  S.cars.push(car);
+  sfx('siren',car.pos,0.5);
+}
+function updateCopCars(dt){
+  const im=S.copBar; let n=0;
+  for(const c of S.cars){
+    if(!c.alive||!c.chase) continue;
+    _a.copy(S.head).sub(c.pos);_a.y=0;
+    const d=_a.length();_a.divideScalar(d||1);
+    // egyszerű üldözés: fordul a cél felé, gyorsít, falnál kerül
+    let want=Math.atan2(_a.x,_a.z);
+    let df=want-c.head;
+    while(df>Math.PI)df-=Math.PI*2;
+    while(df<-Math.PI)df+=Math.PI*2;
+    c.head+=THREE.MathUtils.clamp(df,-2.0*dt,2.0*dt);
+    const tgt=d>14?20:(d>7?9:0);
+    c.speed+=(tgt-c.speed)*Math.min(1,2.2*dt);
+    const fx=Math.sin(c.head),fz=Math.cos(c.head);
+    const nx=c.pos.x+fx*c.speed*dt, nz=c.pos.z+fz*c.speed*dt;
+    if(blockedAt(nx,nz,1.3)){ c.head+=1.6*dt; c.speed*=0.90; }
+    else { c.pos.x=nx; c.pos.z=nz; }
+    carRunOver(c,dt);
+    // villogó
+    c.bar+=dt*9;
+    if(n<im.instanceMatrix.count){
+      _q.setFromAxisAngle(UP,c.head);
+      _d.copy(c.pos);_d.y=(c.kind===1?1.68:1.40);
+      _m.compose(_d,_q,_s.set(1,1,1));
+      im.setMatrixAt(n,_m);
+      _col.setHex(Math.floor(c.bar)%2===0?0xff2436:0x2a7bff);
+      im.setColorAt(n,_col);
+      n++;
+    }
+    // lövés a járműből
+    c.fireT=(c.fireT||1.4)-dt;
+    if(c.fireT<=0&&d<26){
+      c.fireT=1.3+Math.random();
+      _b.copy(S.head).sub(c.pos).normalize();
+      _b.x+=(Math.random()-0.5)*0.07;_b.z+=(Math.random()-0.5)*0.07;
+      _b.normalize().multiplyScalar(26);
+      _c.copy(c.pos);_c.y=1.2;
+      fire(S.eshots,_c,_b,8,false);
+      sfx('efire',c.pos,0.5);
+    }
+  }
+  im.count=n;
+  im.instanceMatrix.needsUpdate=true;
+  if(im.instanceColor)im.instanceColor.needsUpdate=true;
+}
+
+// ============================================================
+//  KÜLDETÉSEK
+// ============================================================
+const JOBS=[
+  {id:'futar', nev:'FUTÁR',   sub:'érj oda időben',        pts:3, time:52, pay:900},
+  {id:'verseny',nev:'VERSENY',sub:'hajtsd végig a pontokat',pts:5, time:70, pay:1800},
+  {id:'menekules',nev:'MENEKÜLÉS',sub:'rázd le a rendőrséget',pts:0,time:75, pay:2600,wanted:3}
+];
+function buildBeacon(){
+  const g=new THREE.Group();
+  const col=new THREE.Mesh(new THREE.CylinderGeometry(1.7,1.7,40,20,1,true),
+    new THREE.MeshBasicMaterial({color:0xffd93d,transparent:true,opacity:0.16,
+      blending:THREE.AdditiveBlending,depthWrite:false,side:THREE.DoubleSide}));
+  col.position.y=20;g.add(col);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(1.9,0.10,8,30),
+    new THREE.MeshBasicMaterial({color:0xffd93d,toneMapped:false}));
+  ring.rotation.x=-Math.PI/2;ring.position.y=0.3;g.add(ring);
+  const ring2=ring.clone();ring2.position.y=1.5;ring2.scale.setScalar(0.7);g.add(ring2);
+  g.visible=false;S.scene.add(g);
+  S.beacon={g,ring,ring2};
+}
+function roadPoint(out){
+  const i=1+Math.floor(Math.random()*(CITY.blocks-1));
+  const j=1+Math.floor(Math.random()*(CITY.blocks-1));
+  out.set(nodeX(i),0,nodeX(j));
+  return out;
+}
+function startJob(kind){
+  const def=JOBS.find(j=>j.id===kind)||JOBS[0];
+  const cps=[];
+  for(let n=0;n<def.pts;n++){
+    const p=new THREE.Vector3();
+    for(let tr=0;tr<12;tr++){ roadPoint(p); if(!blockedAt(p.x,p.z,2)) break; }
+    cps.push(p);
+  }
+  S.mission={def,cps,idx:0,time:def.time,done:false};
+  if(def.wanted) crime(def.wanted);
+  banner(def.nev,def.sub,'#ffd93d',2.4);
+  sfx('star',S.head,0.7);
+}
+function endJob(ok){
+  const m=S.mission;if(!m)return;
+  if(ok){
+    S.money+=m.def.pay; S.score+=m.def.pay;
+    banner('TELJESÍTVE','+'+m.def.pay+' kredit','#6ee7a0',2.6);
+    sfx('star',S.head,0.8);
+  }else{
+    banner('BUKTA','','#ff4d6d',2.0);
+  }
+  S.mission=null;
+  S.beacon.g.visible=false;
+}
+function updateMission(dt){
+  const b=S.beacon;
+  const m=S.mission;
+  if(!m){
+    // nincs futó meló: a hub-jelző a kiindulópontnál
+    b.g.visible=true;
+    b.g.position.set(0,0,0);
+    b.ring.rotation.z+=dt*1.4;b.ring2.rotation.z-=dt*2.0;
+    _a.copy(S.head);_a.y=0;
+    if(_a.distanceTo(b.g.position)<4.5&&S.jobCd<=0){
+      S.jobCd=3;
+      startJob(JOBS[Math.floor(Math.random()*JOBS.length)].id);
+    }
+    if(S.jobCd>0)S.jobCd-=dt;
+    return;
+  }
+  m.time-=dt;
+  if(m.time<=0){ endJob(false); return; }
+  if(m.def.id==='menekules'){
+    b.g.visible=false;
+    if(S.wanted===0) endJob(true);
+    return;
+  }
+  const t=m.cps[m.idx];
+  b.g.visible=true;
+  b.g.position.copy(t);
+  b.ring.rotation.z+=dt*1.4;b.ring2.rotation.z-=dt*2.0;
+  _a.copy(S.head);_a.y=0;
+  if(_a.distanceTo(t)<5.5){
+    m.idx++;
+    burst(t,0xffd93d,34,4,1.0);
+    sfx('star',t,0.6);
+    if(m.idx>=m.cps.length) endJob(true);
+    else banner((m.cps.length-m.idx)+' PONT','','#ffd93d',1.1);
+  }
 }
 
 // ============================================================
@@ -1630,6 +2059,16 @@ function updateSky(dt){
   S.hemi.color.setHex(0xbcd2ff).lerp(_col.setHex(0x2a3348),n);
   S.hemi.groundColor.setHex(0x3a3f47).lerp(_col.setHex(0x12151b),n);
 
+  // eső: tompább fény, sötétebb ég; villám: pillanatnyi kivilágosodás
+  S.rain+=(S.rainTarget-S.rain)*Math.min(1,dt*0.6);
+  const wet=S.rain, flash=S.bolt;
+  S.sun.intensity*=(1-wet*0.72);
+  S.hemi.intensity*=(1-wet*0.35);
+  S.hemi.intensity+=flash*1.6;
+  S.skyMat.uniforms.top.value.lerp(_col.setHex(0x2a3038),wet*0.8);
+  S.skyMat.uniforms.hor.value.lerp(_col.setHex(0x454b54),wet*0.8);
+  S.skyMat.uniforms.top.value.addScalar(flash*0.55);
+  S.skyMat.uniforms.hor.value.addScalar(flash*0.55);
   if(S.wallMat) S.wallMat.emissiveIntensity=n*1.25;
   if(S.lampMat) S.lampMat.emissiveIntensity=n*2.0;
   if(S.lightMat) S.lightMat.color.setScalar(0.22+n*0.95);
@@ -1706,6 +2145,25 @@ function drawMinimap(g,ox,oy,size){
     tr(c.pos.x,c.pos.z,tmp);
     g.beginPath();g.arc(tmp[0],tmp[1],3.4,0,6.3);g.fill();
   }
+  // rendőrautók
+  g.fillStyle='#2a7bff';
+  for(const c of S.cars){
+    if(!c.alive||!c.chase)continue;
+    tr(c.pos.x,c.pos.z,tmp);
+    g.beginPath();g.arc(tmp[0],tmp[1],4,0,6.3);g.fill();
+  }
+  // küldetés célpontja: a peremen is látszik, ha kilóg
+  if(S.mission&&S.mission.cps.length&&S.mission.idx<S.mission.cps.length){
+    const t2=S.mission.cps[S.mission.idx];
+    tr(t2.x,t2.z,tmp);
+    let vx=tmp[0]-cx, vy=tmp[1]-cy;
+    const vl=Math.hypot(vx,vy);
+    if(vl>half-10){ vx*=(half-10)/vl; vy*=(half-10)/vl; }
+    g.fillStyle='#ffd93d';
+    g.beginPath();g.arc(cx+vx,cy+vy,5.5,0,6.3);g.fill();
+    g.strokeStyle='rgba(255,217,61,0.55)';g.lineWidth=2;
+    g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+vx,cy+vy);g.stroke();
+  }
   // játékos
   g.fillStyle='#4fd8e6';
   g.beginPath();g.moveTo(cx,cy-8);g.lineTo(cx+6,cy+7);g.lineTo(cx,cy+3);g.lineTo(cx-6,cy+7);
@@ -1745,10 +2203,21 @@ function drawHud(dt){
     g.fillStyle=i<S.wanted?'#ff4d6d':'#252d3a';
     g.fillText('★',L+i*44,216);
   }
-  // napszak
+  // napszak, kredit, küldetés
   g.fillStyle='#8593a8';g.font='700 24px Inter,system-ui,sans-serif';
   const hh=Math.floor(S.time*24), mm=Math.floor((S.time*24-hh)*60);
   g.fillText((hh<10?'0':'')+hh+':'+(mm<10?'0':'')+mm,L,268);
+  g.fillStyle='#6ee7a0';g.font='800 28px Inter,system-ui,sans-serif';
+  g.fillText(S.money.toLocaleString('hu')+' kr',L+110,268);
+  if(S.mission){
+    g.fillStyle='#ffd93d';g.font='800 26px Inter,system-ui,sans-serif';
+    const left=Math.max(0,Math.ceil(S.mission.time));
+    const rem=S.mission.def.pts?(' · '+(S.mission.cps.length-S.mission.idx)+' pont'):'';
+    g.fillText(S.mission.def.nev+'  '+left+' mp'+rem,L+300,268);
+  }else{
+    g.fillStyle='#8593a8';g.font='700 22px Inter,system-ui,sans-serif';
+    g.fillText('meló: menj a sárga oszlophoz',L+300,268);
+  }
 
   // fegyver / sebesség
   g.textAlign='right';
@@ -1835,6 +2304,11 @@ function init(){
   buildCars();
   buildPeds();
   buildCops();
+  buildShadows();
+  buildRain();
+  buildLights();
+  buildCopBars();
+  buildBeacon();
   buildHud();
   buildHands();
   buildGun();
@@ -1897,14 +2371,18 @@ function tick(time,frame){
       if(S.inCar) exitCar();
       else if(!enterCar()) startReload();
     }
+    if(btnDown(S.offHand,3)) setWeather(S.rainTarget>0.4?0:0.9);
     if(S.inCar) updateDriving(dt); else locomotion(dt);
     updateGun(dt);
+    updateLights(dt);
     updateTraffic(dt);
+    updateCopCars(dt);
     updatePeds(dt);
     updateWanted(dt);
     updateCops(dt);
     updateBullets(dt);
     updateEShots(dt);
+    updateMission(dt);
     S.time=(S.time+dt/900)%1;                    // 15 perces nappal-éjszaka kör
   }
 
@@ -1914,6 +2392,10 @@ function tick(time,frame){
   poolDraw(S.bullets);poolDraw(S.eshots);
   stepParts(dt);
   updateSky(dt);
+  updateRain(dt);
+  drawShadows();
+  if(S.pedMat&&S.pedMat.userData.sh) S.pedMat.userData.sh.uniforms.uT.value+=dt;
+  if(S.copMat&&S.copMat.userData.sh) S.copMat.userData.sh.uniforms.uT.value+=dt;
   drawHud(dt);
   followHead(S.hud,dt,1.15,0.42,3.6);
   if(S.banner.t>0){
@@ -1966,7 +2448,7 @@ function onSession(session){
 }
 function start(){
   S.rig.position.set(8,0,8);S.rig.rotation.y=0;
-  S.hp=100;S.wanted=0;S.score=0;S.cops.length=0;
+  S.hp=100;S.wanted=0;S.score=0;S.cops.length=0;S.mission=null;S.money=0;S.jobCd=1;
   banner('VÁROS',districtName(),'#4fd8e6',2.6);
 }
 function attempt(i,err){
