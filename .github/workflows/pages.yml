@@ -31,11 +31,15 @@ jobs:
         with:
           enablement: true
 
-      # Csak a két HTML kerül ki, a szkriptek és a .git nem.
+      # A TELJES oldal kerül ki, az almappákkal együtt.
+      # (Korábban csak index.html + check.html ment ki, ami letarolta a
+      # branch-alapú telepítést, és minden almappa 404 lett.)
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp index.html check.html _site/
+          rsync -a --exclude='.git' --exclude='.github' --exclude='_site' ./ _site/
+          echo "--- kiszolgált fájlok ---"
+          find _site -type f | sort
 
       - uses: actions/upload-pages-artifact@v3
         with:
