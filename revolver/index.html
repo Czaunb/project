@@ -1,0 +1,1518 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Revolver — VR tanulmány</title>
+<style>
+  :root{--bg:#07080a;--ink:#f0ece6;--mut:#8b857c;--line:#1c1e22;
+        --br:#c8a15a;--st:#9aa3ad;--wd:#8a5a34;color-scheme:dark}
+  *{box-sizing:border-box}html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
+       font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+  canvas{display:block}
+  #ui{position:fixed;inset:0;display:flex;flex-direction:column;justify-content:flex-end;
+      padding:clamp(18px,4.5vw,54px);gap:15px;pointer-events:none;
+      background:linear-gradient(to top,rgba(7,8,10,.97) 44%,rgba(7,8,10,.5) 82%,transparent)}
+  #ui>*{pointer-events:auto;max-width:60ch}
+  .tag{font-size:11.5px;letter-spacing:.3em;text-transform:uppercase;color:var(--mut);font-weight:700}
+  h1{margin:0;font-size:clamp(38px,12vw,88px);font-weight:900;letter-spacing:-.05em;line-height:.86;
+     background:linear-gradient(98deg,var(--st),var(--br) 55%,var(--wd));
+     -webkit-background-clip:text;background-clip:text;color:transparent}
+  p{margin:0;color:var(--mut);line-height:1.62;font-size:15px}
+  .spec{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font-size:13.5px;color:var(--mut)}
+  .spec b{color:var(--ink);font-weight:650}
+  .key{display:inline-block;padding:2px 9px;border-radius:5px;background:#12151a;border:1px solid var(--line);
+       color:var(--ink);font-size:11.5px;font-weight:700;white-space:nowrap}
+  #caps{display:flex;flex-wrap:wrap;gap:6px;font-size:12px}
+  .cap{padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:#0f1114;color:var(--mut)}
+  .cap.on{border-color:rgba(200,161,90,.5);color:var(--br);background:rgba(200,161,90,.08)}
+  .cap.off{border-color:rgba(255,90,90,.35);color:#ff5a5a;background:rgba(255,90,90,.07)}
+  #status{font-size:14px;color:var(--br);min-height:1.4em}
+  button{font:inherit;font-weight:800;font-size:18px;color:#1a1207;background:var(--br);border:0;
+         border-radius:12px;padding:17px 42px;cursor:pointer;align-self:flex-start;
+         transition:transform .1s,background .12s;box-shadow:0 10px 34px rgba(200,161,90,.18)}
+  button:hover{background:#d9b26c}button:active{transform:scale(.975)}
+  button:disabled{background:var(--line);color:var(--mut);box-shadow:none;cursor:default}
+  button:focus-visible{outline:3px solid var(--st);outline-offset:3px}
+  @media (prefers-reduced-motion:reduce){button{transition:none}}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div class="tag">Mechanikai tanulmány · teljes VR</div>
+  <h1>Revolver</h1>
+  <p>Egy 4 hüvelykes szervizrevolver, működő mechanikával. A ravasz <b>analóg</b>: ahogy húzod, úgy emelkedik a kakas és fordul a dob — és a végén elcsattan.</p>
+  <div class="spec">
+    <span class="key">Markolat</span><span>Felveszed és leteszed a fegyvert</span>
+    <span class="key">Ravasz</span><span><b>Fokozatosan húzva</b> működteti a dupla akciós szerkezetet</span>
+    <span class="key">Bal kéz · ravasz</span><span>Kakas felhúzása — utána a ravasz könnyű és pontos</span>
+    <span class="key">Bal kéz · markolat</span><span>Dobkioldó: a dob kifordul; nyitva üríthetsz és tölthetsz</span>
+    <span class="key">Bal kar</span><span>Kifordult dobnál: kiürítő rúd, illetve töltés</span>
+    <span class="key">A / X</span><span>Alkatrésznevek ki és be</span>
+  </div>
+  <div id="caps"></div>
+  <div id="status">Ellenőrzés…</div>
+  <button id="enter" disabled>Belépés</button>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const statusEl=document.getElementById('status'),enterEl=document.getElementById('enter'),
+      uiEl=document.getElementById('ui'),capsEl=document.getElementById('caps');
+
+// ============================================================
+//  MÉRETEK — egy 4"-es .357-es szervizrevolver arányai, méterben
+// ============================================================
+const D={
+  barrelLen:0.1016,        // 4 hüvelyk
+  barrelOD:0.0098,         // cső külső sugara
+  bore:0.00455,            // furat sugara (.357)
+  ribH:0.0042,             // szellőzött sín a csövön
+  lugH:0.0125,             // alsó tok a kiürítő rúdnak
+  cylR:0.0203,             // dob sugara
+  cylLen:0.0405,           // dob hossza
+  chamberR:0.00485,        // kamra sugara
+  chamberDist:0.0122,      // kamrák távolsága a tengelytől
+  fluteDepth:0.0021,
+  frameLen:0.052,
+  gripH:0.108,
+  gripW:0.0165,
+  hammerPivot:new THREE.Vector3(0,0.0212,0.0242),
+  triggerPivot:new THREE.Vector3(0,-0.0032,0.0035),
+  cylCenter:new THREE.Vector3(0,0.0112,-0.0205),
+  muzzleZ:-0.1425,
+  rounds:6
+};
+
+const CFG={
+  walk:1.4, snapDeg:45, snapCd:0.22, eye:1.62, deadzone:0.18,
+  triggerBreak:0.86,       // ennél az analóg értéknél csattan el
+  saBreak:0.34,            // felhúzott kakasnál sokkal könnyebb
+  daTravel:0.86,           // a dupla akciós út hossza
+  recoilKick:1.0,
+  muzzleVel:330,           // m/s
+  maxCasings:24, maxParticles:900
+};
+
+// ============================================================
+//  ÁLLAPOT
+// ============================================================
+const S={
+  renderer:null,scene:null,camera:null,rig:null,clock:null,envRT:null,
+  head:new THREE.Vector3(0,CFG.eye,0),headQ:new THREE.Quaternion(),fwd:new THREE.Vector3(0,0,-1),
+  vel:new THREE.Vector3(),vig:null,vigAmt:0,fade:0,snapCd:0,
+  ctrls:[],gunHand:null,offHand:null,
+  gun:null,parts:{},labels:null,labelsOn:false,
+  // mechanika
+  hammer:0,hammerV:0,      // 0 = leeresztve, 1 = felhúzva
+  cocked:false,
+  trig:0,            // ravaszút 0..1
+  daActive:false,daBase:Math.PI/2,daNext:1,
+  heldBy:null,zone:null,gunBaseRotX:-0.30,gunBaseZ:0.028,
+  cylIndex:0,        // melyik kamra van a cső előtt
+  cylSpin:Math.PI/2, // a 0. kamra induláskor felül, a cső előtt
+  cylOpen:0,         // 0 = zárva, 1 = kifordulva
+  cylOpenTarget:0,
+  ejector:0,
+  chambers:[],       // 'live' | 'spent' | 'empty'
+  loadT:0, fired:false, dryT:0,
+  recoil:0,recoilV:0,
+  casings:[],parts3:null,smoke:null,
+  targets:[],score:0,shots:0,hits:0,
+  audio:null,sfxN:0,
+  hud:null,banner:null,
+  phase:'menu',granted:[],session:null,stats:{calls:0,tris:0,fps:0}
+};
+const _a=new THREE.Vector3(),_b=new THREE.Vector3(),_c=new THREE.Vector3(),_d=new THREE.Vector3(),
+      _q=new THREE.Quaternion(),_m=new THREE.Matrix4(),_s=new THREE.Vector3(1,1,1),_col=new THREE.Color();
+const UP=new THREE.Vector3(0,1,0),ZAX=new THREE.Vector3(0,0,1);
+
+// ============================================================
+//  TEXTÚRÁK — mind kódból
+// ============================================================
+function woodTexture(){
+  const N=512,c=document.createElement('canvas');c.width=c.height=N;
+  const g=c.getContext('2d');
+  g.fillStyle='#6d4426';g.fillRect(0,0,N,N);
+  // évgyűrűk
+  for(let i=0;i<180;i++){
+    const y=Math.random()*N;
+    const w=0.6+Math.random()*2.6;
+    const dark=Math.random()<0.5;
+    g.strokeStyle=dark?'rgba(48,27,13,'+(0.10+Math.random()*0.22)+')'
+                      :'rgba(150,104,58,'+(0.07+Math.random()*0.16)+')';
+    g.lineWidth=w;
+    g.beginPath();
+    for(let x=0;x<=N;x+=16){
+      const yy=y+Math.sin(x*0.018+i)*7+Math.sin(x*0.005+i*2.1)*16;
+      if(x===0)g.moveTo(x,yy);else g.lineTo(x,yy);
+    }
+    g.stroke();
+  }
+  // pórusok
+  for(let i=0;i<2600;i++){
+    g.fillStyle='rgba(38,22,11,'+(0.05+Math.random()*0.13)+')';
+    g.fillRect(Math.random()*N,Math.random()*N,1+Math.random()*3,1);
+  }
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=8;
+  t.colorSpace=THREE.SRGBColorSpace;
+  return t;
+}
+// gyémántmetszésű kockázás a markolatpanelen — érdességtérképként
+function checkerTexture(){
+  const N=512,c=document.createElement('canvas');c.width=c.height=N;
+  const g=c.getContext('2d');
+  g.fillStyle='#8a8a8a';g.fillRect(0,0,N,N);
+  const step=N/26;
+  g.save();g.translate(N/2,N/2);g.rotate(Math.PI/4);g.translate(-N/2,-N/2);
+  for(let x=-N;x<N*2;x+=step){
+    g.strokeStyle='rgba(20,20,20,0.85)';g.lineWidth=2.2;
+    g.beginPath();g.moveTo(x,-N);g.lineTo(x,N*2);g.stroke();
+    g.beginPath();g.moveTo(-N,x);g.lineTo(N*2,x);g.stroke();
+  }
+  g.restore();
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=8;
+  return t;
+}
+// finom kopás és karc az acélon
+function steelRough(){
+  const N=512,c=document.createElement('canvas');c.width=c.height=N;
+  const g=c.getContext('2d');
+  g.fillStyle='#4a4a4a';g.fillRect(0,0,N,N);
+  for(let i=0;i<900;i++){
+    g.strokeStyle='rgba(255,255,255,'+(0.02+Math.random()*0.07)+')';
+    g.lineWidth=0.5+Math.random();
+    const x=Math.random()*N,y=Math.random()*N,l=6+Math.random()*60,a=Math.random()*Math.PI;
+    g.beginPath();g.moveTo(x,y);g.lineTo(x+Math.cos(a)*l,y+Math.sin(a)*l);g.stroke();
+  }
+  for(let i=0;i<260;i++){
+    g.fillStyle='rgba(255,255,255,'+(0.05+Math.random()*0.16)+')';
+    g.beginPath();g.arc(Math.random()*N,Math.random()*N,1+Math.random()*4,0,6.3);g.fill();
+  }
+  const t=new THREE.CanvasTexture(c);
+  t.wrapS=t.wrapT=THREE.RepeatWrapping;t.anisotropy=8;
+  return t;
+}
+
+// ============================================================
+//  ANYAGOK
+// ============================================================
+let MAT={};
+function buildMaterials(){
+  const rough=steelRough();
+  rough.repeat.set(3,3);
+  MAT.blued=new THREE.MeshStandardMaterial({color:0x1b1e23,metalness:1.0,roughness:0.24,
+    roughnessMap:rough,envMapIntensity:1.35});
+  MAT.bluedWorn=new THREE.MeshStandardMaterial({color:0x2c3038,metalness:1.0,roughness:0.17,
+    roughnessMap:rough,envMapIntensity:1.6});
+  MAT.case=new THREE.MeshStandardMaterial({color:0x3a3228,metalness:1.0,roughness:0.31,
+    roughnessMap:rough,envMapIntensity:1.25});
+  MAT.steel=new THREE.MeshStandardMaterial({color:0x7d858e,metalness:1.0,roughness:0.22,
+    roughnessMap:rough,envMapIntensity:1.5});
+  MAT.dark=new THREE.MeshStandardMaterial({color:0x090a0c,metalness:0.6,roughness:0.65});
+  const wood=woodTexture(), chk=checkerTexture();
+  chk.repeat.set(2.1,3.4);
+  MAT.wood=new THREE.MeshStandardMaterial({map:wood,roughnessMap:chk,roughness:0.62,metalness:0.0,
+    color:0xb08258,envMapIntensity:0.5});
+  MAT.brass=new THREE.MeshStandardMaterial({color:0xb5903c,metalness:1.0,roughness:0.28,
+    roughnessMap:rough,envMapIntensity:1.5});
+  MAT.brassSpent=new THREE.MeshStandardMaterial({color:0x8a6d2c,metalness:1.0,roughness:0.46,
+    roughnessMap:rough,envMapIntensity:1.1});
+  MAT.lead=new THREE.MeshStandardMaterial({color:0x9a9a9a,metalness:0.85,roughness:0.52});
+  MAT.primer=new THREE.MeshStandardMaterial({color:0xb9b2a4,metalness:0.95,roughness:0.34});
+  MAT.primerFired=new THREE.MeshStandardMaterial({color:0x8e887c,metalness:0.9,roughness:0.5});
+}
+
+// ============================================================
+//  ALAP
+// ============================================================
+function init(){
+  S.scene=new THREE.Scene();
+  S.scene.background=new THREE.Color(0x07080a);
+  S.scene.fog=new THREE.Fog(0x07080a,14,60);
+
+  S.camera=new THREE.PerspectiveCamera(72,innerWidth/innerHeight,0.02,200);
+  S.camera.position.set(0,CFG.eye,0);
+
+  S.renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
+  S.renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  S.renderer.setSize(innerWidth,innerHeight);
+  S.renderer.xr.enabled=true;
+  S.renderer.xr.setReferenceSpaceType('local-floor');
+  S.renderer.toneMapping=THREE.ACESFilmicToneMapping;
+  S.renderer.toneMappingExposure=1.05;
+  document.body.appendChild(S.renderer.domElement);
+
+  // környezettérkép: enélkül a fém lapos és halott
+  const pmrem=new THREE.PMREMGenerator(S.renderer);
+  S.envRT=pmrem.fromScene(new RoomEnvironment(),0.04);
+  S.scene.environment=S.envRT.texture;
+  pmrem.dispose();
+
+  S.rig=new THREE.Group();
+  S.rig.add(S.camera);
+  S.scene.add(S.rig);
+
+  buildMaterials();
+  buildRange();
+  buildVignette();
+  buildParticles();
+  buildCasings();
+  buildHud();
+  buildHands();
+  buildRevolver();
+  buildTargets();
+  resetChambers(true);
+
+  S.clock=new THREE.Clock();
+  addEventListener('resize',onResize);
+  S.renderer.setAnimationLoop(tick);
+}
+function onResize(){S.camera.aspect=innerWidth/innerHeight;S.camera.updateProjectionMatrix();
+  S.renderer.setSize(innerWidth,innerHeight);}
+
+// ============================================================
+//  A REVOLVER
+// ============================================================
+function P(parent,geo,mat,x,y,z,rx,ry,rz,name){
+  const m=new THREE.Mesh(geo,mat);
+  m.position.set(x||0,y||0,z||0);
+  if(rx)m.rotation.x=rx; if(ry)m.rotation.y=ry; if(rz)m.rotation.z=rz;
+  if(name)m.name=name;
+  parent.add(m);
+  return m;
+}
+// lekerekített téglalap alakzat kihúzáshoz
+function roundRectShape(w,h,r){
+  const s=new THREE.Shape();
+  const x=-w/2,y=-h/2;
+  s.moveTo(x+r,y);
+  s.lineTo(x+w-r,y); s.quadraticCurveTo(x+w,y,x+w,y+r);
+  s.lineTo(x+w,y+h-r); s.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  s.lineTo(x+r,y+h); s.quadraticCurveTo(x,y+h,x,y+h-r);
+  s.lineTo(x,y+r); s.quadraticCurveTo(x,y,x+r,y);
+  return s;
+}
+// A dob keresztmetszete: hat horony a palástján, és hat ÁTFÚRT kamra.
+// A hornyok a kamrák közé esnek, ahogy a valóságban.
+function cylinderShape(){
+  const s=new THREE.Shape();
+  const N=192;
+  for(let i=0;i<=N;i++){
+    const a=i/N*Math.PI*2;
+    const fa=((a*6/(Math.PI*2))+0.5)%1;          // 30 fokkal eltolva a kamrákhoz képest
+    const d=Math.max(0,Math.cos((fa-0.5)*Math.PI*2)*0.5+0.5);
+    const r=D.cylR-D.fluteDepth*Math.pow(d,2.6);
+    const x=Math.cos(a)*r, y=Math.sin(a)*r;
+    if(i===0)s.moveTo(x,y); else s.lineTo(x,y);
+  }
+  for(let c=0;c<D.rounds;c++){
+    const a=c/D.rounds*Math.PI*2;
+    const h=new THREE.Path();
+    h.absarc(Math.cos(a)*D.chamberDist,Math.sin(a)*D.chamberDist,D.chamberR,0,Math.PI*2,true);
+    s.holes.push(h);
+  }
+  return s;
+}
+function chamberAngle(i){ return i/D.rounds*Math.PI*2; }
+
+// egy .357-es töltény
+function makeRound(spent){
+  const g=new THREE.Group();
+  const caseLen=0.0330, caseR=0.00445;
+  const cs=P(g,new THREE.CylinderGeometry(caseR,caseR*0.985,caseLen,20,1,false),
+             spent?MAT.brassSpent:MAT.brass,0,0,caseLen/2,Math.PI/2);
+  P(g,new THREE.CylinderGeometry(caseR*1.13,caseR*1.13,0.0018,20),
+    spent?MAT.brassSpent:MAT.brass,0,0,0.0009,Math.PI/2);            // perem
+  P(g,new THREE.CylinderGeometry(caseR*0.42,caseR*0.42,0.0012,14),
+    spent?MAT.primerFired:MAT.primer,0,0,0.0004,Math.PI/2);          // csappantyú
+  if(!spent){
+    P(g,new THREE.CylinderGeometry(caseR*0.93,caseR*0.93,0.0092,20),
+      MAT.lead,0,0,caseLen+0.0046,Math.PI/2);
+    P(g,new THREE.SphereGeometry(caseR*0.93,18,12,0,Math.PI*2,0,Math.PI/2),
+      MAT.lead,0,0,caseLen+0.0092,-Math.PI/2);                        // orr
+  }
+  g.userData.spent=!!spent;
+  return g;
+}
+
+function placeOnStand(){
+  if(!S.gun||!S.stand)return;
+  S.scene.add(S.gun);
+  S.stand.getWorldPosition(_a);
+  S.gun.position.copy(_a);
+  S.gun.position.y+=0.026;
+  S.gun.rotation.set(-Math.PI/2,0,0.22);     // az oldalán fekszik a posztón
+  S.gun.visible=true;
+}
+function buildRevolver(){
+  const gun=new THREE.Group();
+  S.gun=gun;
+  const F=new THREE.Group(); gun.add(F);           // álló váz
+  S.parts.frame=F;
+
+  // ---------- VÁZ ----------
+  const frameGeo=new THREE.ExtrudeGeometry(roundRectShape(0.0176,0.0470,0.0035),
+    {depth:0.0455,bevelEnabled:true,bevelSize:0.0009,bevelThickness:0.0009,bevelSegments:2,curveSegments:8});
+  P(F,frameGeo,MAT.blued,0,0.0075,-0.0415,0,0,0,'váz');
+  // felső híd a dob fölött
+  P(F,new THREE.BoxGeometry(0.0168,0.0044,0.0455),MAT.blued,0,0.0340,-0.0200,0,0,0,'felső híd');
+  // hátsó váz a kakas körül
+  P(F,new THREE.BoxGeometry(0.0176,0.0320,0.0180),MAT.blued,0,0.0165,0.0130);
+  // tokrész, ahol a dob ül (oldalfalak)
+  for(const sx of [-1,1])
+    P(F,new THREE.BoxGeometry(0.0022,0.0330,0.0430),MAT.blued,sx*0.0088,0.0112,-0.0205);
+
+  // ---------- CSŐ ----------
+  const bShape=new THREE.Shape();
+  bShape.absarc(0,0,D.barrelOD,0,Math.PI*2,false);
+  const bHole=new THREE.Path(); bHole.absarc(0,0,D.bore,0,Math.PI*2,true);
+  bShape.holes.push(bHole);
+  const barrel=P(F,new THREE.ExtrudeGeometry(bShape,{depth:D.barrelLen,bevelEnabled:false,curveSegments:32}),
+    MAT.blued,0,0.0234,D.muzzleZ,0,0,0,'cső');
+  // huzagolás — a torkolatba nézve látszik
+  for(let i=0;i<6;i++){
+    const a=i/6*Math.PI*2;
+    P(barrel,new THREE.BoxGeometry(0.0013,0.0011,D.barrelLen*0.985),MAT.dark,
+      Math.cos(a)*(D.bore+0.0004),Math.sin(a)*(D.bore+0.0004),D.barrelLen/2,0,0,a);
+  }
+  // szellőzött sín a cső tetején
+  const ribZ0=-0.0425, ribLen=D.barrelLen-0.004;
+  P(F,new THREE.BoxGeometry(0.0106,D.ribH,ribLen),MAT.blued,0,0.0234+D.barrelOD+D.ribH/2-0.0006,
+    ribZ0-ribLen/2,0,0,0,'szellőzött sín');
+  for(let i=0;i<7;i++)
+    P(F,new THREE.BoxGeometry(0.0062,D.ribH+0.002,0.0052),MAT.dark,0,
+      0.0234+D.barrelOD+D.ribH/2-0.0006, ribZ0-0.012-i*0.0122);
+  // alsó tok
+  const lug=P(F,new THREE.ExtrudeGeometry(roundRectShape(0.0128,D.lugH*2,0.0030),
+    {depth:D.barrelLen-0.006,bevelEnabled:true,bevelSize:0.0006,bevelThickness:0.0006,bevelSegments:2}),
+    MAT.blued,0,0.0234-D.barrelOD-D.lugH*0.62,D.muzzleZ+0.003,0,0,0,'alsó tok');
+  // kiürítő rúd és gombja
+  const ejGroup=new THREE.Group(); F.add(ejGroup); S.parts.ejector=ejGroup;
+  P(ejGroup,new THREE.CylinderGeometry(0.0024,0.0024,0.075,14),MAT.steel,
+    0,0.0234-D.barrelOD-D.lugH*0.62,-0.072,Math.PI/2,0,0,'kiürítő rúd');
+  P(ejGroup,new THREE.CylinderGeometry(0.0038,0.0032,0.0075,16),MAT.blued,
+    0,0.0234-D.barrelOD-D.lugH*0.62,-0.1085,Math.PI/2);
+
+  // ---------- IRÁNYZÉK ----------
+  P(F,new THREE.BoxGeometry(0.0030,0.0082,0.0125),MAT.blued,0,0.0234+D.barrelOD+D.ribH+0.0028,
+    D.muzzleZ+0.010,0.22,0,0,'célgömb');
+  P(F,new THREE.BoxGeometry(0.0032,0.0048,0.0022),MAT.dark,0,0.0234+D.barrelOD+D.ribH+0.0050,
+    D.muzzleZ+0.0062);
+  const rs=new THREE.Group(); F.add(rs);
+  P(rs,new THREE.BoxGeometry(0.0128,0.0068,0.0052),MAT.blued,0,0.0382,0.0038,0,0,0,'irányzék');
+  P(rs,new THREE.BoxGeometry(0.0026,0.0050,0.0060),MAT.dark,0,0.0404,0.0038);
+
+  // ---------- DOB ----------
+  const crane=new THREE.Group();                    // a dob kifordító karja
+  crane.position.set(-0.0088,D.cylCenter.y,-0.0405);
+  F.add(crane);
+  S.parts.crane=crane;
+  const cylPivot=new THREE.Group();
+  cylPivot.position.set(0.0088,0,0.0405);
+  crane.add(cylPivot);
+  const cylRot=new THREE.Group();
+  cylPivot.add(cylRot);
+  S.parts.cylRot=cylRot;
+  S.parts.cylPivot=cylPivot;
+
+  const cylGeo=new THREE.ExtrudeGeometry(cylinderShape(),
+    {depth:D.cylLen,bevelEnabled:true,bevelSize:0.0010,bevelThickness:0.0010,bevelSegments:2,curveSegments:1});
+  P(cylRot,cylGeo,MAT.blued,0,0,D.cylCenter.z-D.cylLen/2,0,0,0,'dob');
+  // kivonócsillag hátul
+  P(cylRot,new THREE.CylinderGeometry(0.0092,0.0092,0.0022,24),MAT.steel,
+    0,0,D.cylCenter.z+D.cylLen/2+0.0011,Math.PI/2,0,0,'kivonócsillag');
+  for(let i=0;i<D.rounds;i++){
+    const a=chamberAngle(i)+Math.PI/D.rounds;
+    P(cylRot,new THREE.BoxGeometry(0.0030,0.0062,0.0022),MAT.steel,
+      Math.cos(a)*0.0072,Math.sin(a)*0.0072,D.cylCenter.z+D.cylLen/2+0.0011,0,0,a);
+  }
+  // reteszelő bevágások a paláston
+  for(let i=0;i<D.rounds;i++){
+    const a=chamberAngle(i)+Math.PI/D.rounds;
+    P(cylRot,new THREE.BoxGeometry(0.0042,0.0016,0.0052),MAT.dark,
+      Math.cos(a)*(D.cylR-0.0006),Math.sin(a)*(D.cylR-0.0006),D.cylCenter.z+0.006,0,0,a+Math.PI/2);
+  }
+  S.parts.rounds=[];
+  for(let i=0;i<D.rounds;i++){
+    const holder=new THREE.Group();
+    const a=chamberAngle(i);
+    holder.position.set(Math.cos(a)*D.chamberDist,Math.sin(a)*D.chamberDist,
+                        D.cylCenter.z+D.cylLen/2-0.0005);
+    holder.rotation.y=Math.PI;                     // a lövedék előre néz
+    cylRot.add(holder);
+    S.parts.rounds.push({holder,mesh:null});
+  }
+
+  // dobkioldó a váz bal oldalán
+  P(F,new THREE.BoxGeometry(0.0030,0.0090,0.0210),MAT.blued,-0.0098,0.0175,0.0055,0,0,0,'dobkioldó');
+
+  // ---------- KAKAS ----------
+  const ham=new THREE.Group();
+  ham.position.copy(D.hammerPivot);
+  F.add(ham);
+  S.parts.hammer=ham;
+  P(ham,new THREE.BoxGeometry(0.0062,0.0210,0.0072),MAT.case,0,0.0082,0.0022,0,0,0,'kakas');
+  P(ham,new THREE.BoxGeometry(0.0104,0.0062,0.0098),MAT.case,0,0.0196,0.0060,-0.35,0,0,'kakassarkantyú');
+  for(let i=0;i<7;i++)                               // recézés a sarkantyún
+    P(ham,new THREE.BoxGeometry(0.0096,0.0009,0.0010),MAT.dark,0,0.0214,0.0030+i*0.0014,-0.35);
+  P(ham,new THREE.CylinderGeometry(0.0021,0.0021,0.0070,14),MAT.steel,0,0,0,0,0,Math.PI/2);
+  P(ham,new THREE.BoxGeometry(0.0022,0.0026,0.0030),MAT.steel,0,0.0022,-0.0044,0,0,0,'ütőszeg');
+
+  // ---------- RAVASZ ----------
+  const trg=new THREE.Group();
+  trg.position.copy(D.triggerPivot);
+  F.add(trg);
+  S.parts.trigger=trg;
+  const tShape=new THREE.Shape();
+  tShape.moveTo(0.0022,0.0028);
+  tShape.quadraticCurveTo(0.0052,-0.0060,0.0016,-0.0140);
+  tShape.quadraticCurveTo(-0.0012,-0.0176,-0.0034,-0.0150);
+  tShape.quadraticCurveTo(-0.0020,-0.0070,-0.0030,0.0022);
+  tShape.quadraticCurveTo(-0.0006,0.0044,0.0022,0.0028);
+  P(trg,new THREE.ExtrudeGeometry(tShape,{depth:0.0056,bevelEnabled:true,bevelSize:0.0006,
+    bevelThickness:0.0006,bevelSegments:2,curveSegments:10}),MAT.case,0,0,-0.0028,0,0,0,'ravasz');
+  for(let i=0;i<9;i++)                               // bordázás a ravasz elején
+    P(trg,new THREE.BoxGeometry(0.0050,0.0008,0.0008),MAT.dark,0,-0.0026-i*0.0013,0.0032,0.35);
+
+  // ---------- RAVASZKENGYEL ----------
+  const tg=new THREE.Shape();
+  tg.absarc(0,0,0.0152,0,Math.PI*2,false);
+  const tgh=new THREE.Path(); tgh.absarc(0,0,0.0118,0,Math.PI*2,true);
+  tg.holes.push(tgh);
+  P(F,new THREE.ExtrudeGeometry(tg,{depth:0.0088,bevelEnabled:false,curveSegments:40}),
+    MAT.blued,0,-0.0148,-0.0044-0.0044,0,0,0,'ravaszkengyel');
+  P(F,new THREE.BoxGeometry(0.0088,0.0058,0.0120),MAT.blued,0,-0.0048,0.0132);
+
+  // ---------- MARKOLAT ----------
+  const gripShape=new THREE.Shape();
+  gripShape.moveTo(-0.0130,0.0060);
+  gripShape.quadraticCurveTo(0.0060,0.0050,0.0168,-0.0130);
+  gripShape.quadraticCurveTo(0.0250,-0.0430,0.0182,-0.0760);
+  gripShape.quadraticCurveTo(0.0150,-0.0930,0.0022,-0.0980);
+  gripShape.quadraticCurveTo(-0.0130,-0.1000,-0.0210,-0.0880);
+  gripShape.quadraticCurveTo(-0.0268,-0.0700,-0.0250,-0.0400);
+  gripShape.quadraticCurveTo(-0.0232,-0.0150,-0.0130,0.0060);
+  const gripGeo=new THREE.ExtrudeGeometry(gripShape,
+    {depth:D.gripW*2,bevelEnabled:true,bevelSize:0.0034,bevelThickness:0.0030,bevelSegments:4,curveSegments:14});
+  P(F,gripGeo,MAT.wood,0,-0.0060,0.0340-D.gripW,0,0,0,'markolatpanel');
+  // markolatváz belül
+  P(F,new THREE.BoxGeometry(0.0140,0.0680,0.0150),MAT.blued,0,-0.0430,0.0272,0.18);
+  // csavarok
+  for(const sc of [[0.0175,-0.0470,0.0340],[-0.0090,0.0175,0.0056],[0.0000,-0.0040,0.0290]]){
+    for(const sx of [-1,1]){
+      const scr=P(F,new THREE.CylinderGeometry(0.0021,0.0021,0.0012,14),MAT.steel,
+        sx*(sc[0]===0?D.gripW+0.0006:0.0092),sc[1],sc[2],0,0,Math.PI/2);
+      P(scr,new THREE.BoxGeometry(0.0034,0.0004,0.0007),MAT.dark,0,0.0007,0);
+    }
+  }
+
+  S.scene.add(gun);
+  placeOnStand();
+  S.parts.list=[];
+  gun.traverse(o=>{ if(o.name&&o.isMesh) S.parts.list.push(o); });
+}
+
+// ============================================================
+//  MECHANIKA
+//  A dupla akciós szerkezet: a ravaszút emeli a kakast ÉS forgatja
+//  a dobot; a végén a kakas elszabadul. Felhúzott kakasnál a dob már
+//  fordult, és a ravasz sokkal rövidebb úton csattan.
+// ============================================================
+const STEP=Math.PI*2/D.rounds;
+function smooth01(x){x=x<0?0:(x>1?1:x);return x*x*(3-2*x);}
+
+function resetChambers(live){
+  S.chambers=[];
+  for(let i=0;i<D.rounds;i++) S.chambers.push(live?'live':'empty');
+  refreshRounds();
+}
+function refreshRounds(){
+  for(let i=0;i<D.rounds;i++){
+    const slot=S.parts.rounds[i];
+    const want=S.chambers[i];
+    const have=slot.mesh?(slot.mesh.userData.spent?'spent':'live'):'empty';
+    if(want===have) continue;
+    if(slot.mesh){ slot.holder.remove(slot.mesh); slot.mesh=null; }
+    if(want!=='empty'){ slot.mesh=makeRound(want==='spent'); slot.holder.add(slot.mesh); }
+  }
+}
+function loadedCount(){ return S.chambers.filter(c=>c==='live').length; }
+
+function cockHammer(){
+  if(S.cylOpen>0.05||S.cocked) return false;
+  S.cylIndex=(S.cylIndex+1)%D.rounds;
+  S.cylSpin-=STEP;
+  S.cocked=true;
+  S.hammerV=8;
+  muzzlePos(_a);
+  sfx('cock',_a,0.75);
+  haptic(S.offHand,0.7,45); haptic(S.gunHand,0.45,30);
+  return true;
+}
+function startDA(){
+  S.daBase=S.cylSpin;
+  S.daNext=(S.cylIndex+1)%D.rounds;
+  S.daActive=true;
+  gripPos(_a); sfx('ratchet',_a,0.3);
+}
+function releaseHammer(fromDA){
+  if(fromDA){ S.cylIndex=S.daNext; S.cylSpin=S.daBase-STEP; }
+  S.cocked=false;
+  S.daActive=false;
+  S.hammerV=-42;                       // a kakas lecsap
+  S.fired=true;
+  fireChamber();
+}
+function fireChamber(){
+  const st=S.chambers[S.cylIndex];
+  muzzlePos(_a);
+  if(st==='live'){
+    S.chambers[S.cylIndex]='spent';
+    refreshRounds();
+    shoot();
+  }else{
+    sfx('dry',_a,0.55);
+    haptic(S.gunHand,0.35,25);
+    S.dryT=0.12;
+  }
+}
+
+function triggerValue(){
+  const p=padOf(S.gunHand);
+  if(!p||!p.buttons||!p.buttons[0]) return 0;
+  const b=p.buttons[0];
+  return typeof b.value==='number'?b.value:(b.pressed?1:0);
+}
+
+function updateMechanism(dt){
+  const held=!!S.heldBy;
+  const tv=held?triggerValue():0;
+  S.trig+=(tv-S.trig)*Math.min(1,26*dt);
+  if(S.trig<0.004)S.trig=0;
+
+  if(S.cylOpen>0.05){                  // nyitott dobnál a szerkezet blokkolva
+    S.hammerV+=(-S.hammer*140-S.hammerV*14)*dt;
+  }else if(S.cocked){
+    S.hammer=1;
+    if(S.trig>CFG.saBreak&&!S.fired) releaseHammer(false);
+  }else{
+    if(!S.fired){
+      if(S.trig>0.06&&!S.daActive) startDA();
+      if(S.daActive){
+        const f=Math.min(1,S.trig/CFG.triggerBreak);
+        S.hammer=f;
+        const adv=smooth01((S.trig-0.06)/0.66);
+        S.cylSpin=S.daBase-adv*STEP;
+        if(S.trig>=CFG.triggerBreak) releaseHammer(true);
+      }
+    }
+  }
+  if(S.trig<0.12){ S.fired=false; if(!S.cocked&&!S.daActive) S.daBase=S.cylSpin; }
+
+  // kakas rugós mozgása
+  if(!S.cocked&&S.cylOpen<=0.05&&!S.daActive){
+    S.hammerV+=(-S.hammer*900-S.hammerV*26)*dt;
+    S.hammer+=S.hammerV*dt;
+    if(S.hammer<0){S.hammer=0;S.hammerV=0;}
+    if(S.hammer>1){S.hammer=1;S.hammerV=0;}
+  }
+
+  // ---- látvány ----
+  S.parts.hammer.rotation.x=-S.hammer*0.62;
+  S.parts.trigger.rotation.x=S.trig*0.40;
+  S.parts.cylRot.rotation.z+=(S.cylSpin-S.parts.cylRot.rotation.z)*Math.min(1,26*dt);
+
+  // dob kifordítása
+  S.cylOpen+=(S.cylOpenTarget-S.cylOpen)*Math.min(1,9*dt);
+  S.parts.crane.rotation.y=S.cylOpen*1.18;
+  // kiürítő rúd
+  S.parts.ejector.position.z=S.ejector*0.030;
+
+  // visszarúgás
+  S.recoilV+=(-S.recoil*210-S.recoilV*17)*dt;
+  S.recoil+=S.recoilV*dt;
+  if(S.dryT>0)S.dryT-=dt;
+}
+
+function toggleCylinder(){
+  if(S.cylOpenTarget>0.5){
+    S.cylOpenTarget=0;
+    gripPos(_a); sfx('close',_a,0.7);
+    haptic(S.offHand,0.7,60);
+    // záráskor a dob a legközelebbi kamrához ugrik
+    S.cylSpin=Math.PI/2-chamberAngle(S.cylIndex);
+    S.daBase=S.cylSpin;
+  }else{
+    if(S.cocked){ S.cocked=false; S.hammerV=-40; }
+    S.cylOpenTarget=1;
+    gripPos(_a); sfx('open',_a,0.7);
+    haptic(S.offHand,0.7,60);
+  }
+}
+function ejectAll(){
+  if(S.cylOpen<0.7) return false;
+  let n=0;
+  for(let i=0;i<D.rounds;i++){
+    if(S.chambers[i]==='empty') continue;
+    const slot=S.parts.rounds[i];
+    slot.holder.getWorldPosition(_a);
+    spawnCasing(_a,S.chambers[i]==='spent');
+    S.chambers[i]='empty';
+    n++;
+  }
+  refreshRounds();
+  if(n){ gripPos(_a); sfx('eject',_a,0.8); haptic(S.offHand,0.9,90); }
+  return n>0;
+}
+function loadOne(){
+  if(S.cylOpen<0.7) return false;
+  for(let k=0;k<D.rounds;k++){
+    const i=(S.cylIndex+k)%D.rounds;
+    if(S.chambers[i]==='empty'){
+      S.chambers[i]='live';
+      refreshRounds();
+      gripPos(_a); sfx('load',_a,0.55);
+      haptic(S.offHand,0.5,30);
+      return true;
+    }
+  }
+  return false;
+}
+
+// a cső torkolatának világpozíciója és iránya
+function muzzlePos(out){
+  if(!S.gun) return out.set(0,1.4,-1);
+  S.gun.updateMatrixWorld(true);
+  out.set(0,0.0234,D.muzzleZ).applyMatrix4(S.gun.matrixWorld);
+  return out;
+}
+function muzzleDir(out){
+  S.gun.getWorldQuaternion(_q);
+  return out.set(0,0,-1).applyQuaternion(_q);
+}
+function gripPos(out){
+  if(!S.gun) return out.set(0,1.4,-1);
+  return out.setFromMatrixPosition(S.gun.matrixWorld);
+}
+
+// ============================================================
+//  BEMENET
+// ============================================================
+function padOf(c){const s=c&&c.userData&&c.userData.src;return s&&s.gamepad?s.gamepad:null;}
+function axes2(p){if(!p||!p.axes)return[0,0];
+  return p.axes.length>3?[p.axes[2],p.axes[3]]:[p.axes[0]||0,p.axes[1]||0];}
+function btn(c,i){const p=padOf(c);return !!(p&&p.buttons&&p.buttons[i]&&p.buttons[i].pressed);}
+function btnDown(c,i){
+  const p=padOf(c);if(!p||!p.buttons||!p.buttons[i])return false;
+  const now=p.buttons[i].pressed,was=!!c.userData.prev[i];
+  c.userData.prev[i]=now;return now&&!was;
+}
+function haptic(c,int,ms){
+  const s=c&&c.userData&&c.userData.src;
+  const a=s&&s.gamepad&&s.gamepad.hapticActuators&&s.gamepad.hapticActuators[0];
+  if(a&&a.pulse){try{a.pulse(int,ms);}catch(e){}}
+}
+function buildHands(){
+  for(let i=0;i<2;i++){
+    const c=S.renderer.xr.getController(i);
+    c.userData={hand:null,src:null,prev:{},idx:i};
+    c.addEventListener('connected',e=>{c.userData.src=e.data;
+      c.userData.hand=(e.data&&e.data.handedness)||null;assignHands();});
+    c.addEventListener('disconnected',()=>{c.userData.src=null;});
+    const g=new THREE.Group();
+    const grip=new THREE.Mesh(new THREE.CapsuleGeometry(0.020,0.058,4,10),
+      new THREE.MeshStandardMaterial({color:0x2a2e35,metalness:0.2,roughness:0.75}));
+    grip.rotation.x=-0.45;g.add(grip);
+    c.add(g);c.userData.model=g;
+    S.rig.add(c);S.ctrls.push(c);
+  }
+  assignHands();
+}
+function assignHands(){
+  let g=null,o=null;
+  for(const c of S.ctrls){if(c.userData.hand==='right')g=c;else if(c.userData.hand==='left')o=c;}
+  if(!g)g=S.ctrls[0]||null;
+  if(!o)o=S.ctrls.find(c=>c!==g)||S.ctrls[1]||null;
+  S.gunHand=g;S.offHand=o;
+}
+function buildVignette(){
+  const m=new THREE.ShaderMaterial({transparent:true,depthTest:false,depthWrite:false,side:THREE.BackSide,
+    uniforms:{amt:{value:0}},
+    vertexShader:'varying vec3 vP;void main(){vP=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+    fragmentShader:`varying vec3 vP;uniform float amt;
+      void main(){ if(amt<0.002) discard;
+        vec3 d=normalize(vP);
+        float ang=acos(clamp(-d.z,-1.0,1.0));
+        float inner=mix(1.75,0.42,clamp(amt,0.0,1.0));
+        gl_FragColor=vec4(0.0,0.0,0.0,smoothstep(inner,inner+0.34,ang)*0.96);}`});
+  const v=new THREE.Mesh(new THREE.SphereGeometry(0.28,24,16),m);
+  v.frustumCulled=false;v.renderOrder=999;S.camera.add(v);S.vig=v;
+}
+function snapTurn(dir){
+  const ang=dir*CFG.snapDeg*Math.PI/180;
+  S.rig.updateMatrixWorld(true);
+  S.camera.getWorldPosition(_a);
+  S.rig.rotation.y+=ang;
+  S.rig.updateMatrixWorld(true);
+  S.camera.getWorldPosition(_b);
+  S.rig.position.add(_a.sub(_b));
+  S.fade=0.09;
+}
+function locomotion(dt){
+  if(S.snapCd>0)S.snapCd-=dt;
+  const ra=axes2(padOf(S.gunHand));
+  if(Math.abs(ra[0])>0.7&&S.snapCd<=0){snapTurn(ra[0]>0?-1:1);S.snapCd=CFG.snapCd;}
+  else if(Math.abs(ra[0])<0.35)S.snapCd=Math.min(S.snapCd,0.02);
+  const la=axes2(padOf(S.offHand));
+  const mag=Math.hypot(la[0],la[1]);
+  _c.set(0,0,0);
+  if(mag>CFG.deadzone){
+    const n=(mag-CFG.deadzone)/(1-CFG.deadzone);
+    _a.set(0,0,-1).applyQuaternion(S.headQ);_a.y=0;
+    if(_a.lengthSq()<1e-6)_a.set(0,0,-1);_a.normalize();
+    _b.set(-_a.z,0,_a.x);
+    _c.addScaledVector(_a,(-la[1]/mag)*n*CFG.walk).addScaledVector(_b,(la[0]/mag)*n*CFG.walk);
+  }
+  S.vel.lerp(_c,Math.min(1,9*dt));
+  S.rig.position.addScaledVector(S.vel,dt);
+  S.rig.position.x=Math.max(-6,Math.min(6,S.rig.position.x));
+  S.rig.position.z=Math.max(-3.2,Math.min(4.5,S.rig.position.z));
+  const sp=S.vel.length();
+  S.vigAmt+=(Math.min(0.5,sp/CFG.walk*0.5)-S.vigAmt)*Math.min(1,(sp>0.05?6:22)*dt);
+}
+
+// ============================================================
+//  FOGÁS ÉS KEZELÉS
+// ============================================================
+function tryGrab(){
+  if(S.heldBy) return;
+  S.gunHand.getWorldPosition(_a);
+  S.stand.getWorldPosition(_b);_b.y+=0.03;
+  if(_a.distanceTo(_b)>0.5) return;
+  S.heldBy=S.gunHand;
+  S.gunHand.add(S.gun);
+  S.gunBaseRotX=-0.30; S.gunBaseZ=0.028;
+  S.gun.position.set(0,-0.012,S.gunBaseZ);
+  S.gun.rotation.set(S.gunBaseRotX,0,0);         // természetes markolatszög
+  haptic(S.gunHand,0.6,45);
+  gripPos(_a);sfx('handle',_a,0.5);
+  banner('A KEZEDBEN','a ravasz analóg — húzd lassan','#c8a15a',2.4);
+}
+function release(){
+  if(!S.heldBy) return;
+  S.heldBy.remove(S.gun);
+  placeOnStand();
+  S.heldBy=null;
+  S.trig=0;S.cocked=false;S.hammer=0;S.hammerV=0;
+  haptic(S.gunHand,0.4,30);
+}
+// a bal kéz helye a fegyver saját terében dönti el, mit fogsz meg
+function offHandZone(){
+  if(!S.heldBy||!S.offHand) return null;
+  S.offHand.getWorldPosition(_a);
+  S.gun.updateMatrixWorld(true);
+  _b.copy(_a).applyMatrix4(_m.copy(S.gun.matrixWorld).invert());
+  if(_b.length()>0.26) return null;
+  if(_b.z>0.008&&_b.y>0.012) return 'hammer';
+  if(_b.z<-0.075) return 'ejector';
+  if(_b.z>-0.070&&_b.z<0.012) return 'cylinder';
+  return null;
+}
+function handleOffHand(dt){
+  const z=offHandZone();
+  S.zone=z;
+  if(!z) { S.loadT=0; return; }
+  const trigDown=btnDown(S.offHand,0), trigHeld=btn(S.offHand,0);
+  const gripDown=btnDown(S.offHand,1);
+
+  if(z==='hammer'&&trigDown) cockHammer();
+  if(z==='cylinder'&&gripDown) toggleCylinder();
+  if(z==='ejector'){
+    S.ejector=trigHeld?1:Math.max(0,S.ejector-dt*6);
+    if(trigDown) ejectAll();
+  }else S.ejector=Math.max(0,S.ejector-dt*6);
+  if(z==='cylinder'&&S.cylOpen>0.7&&trigHeld){
+    S.loadT-=dt;
+    if(S.loadT<=0){ if(loadOne()) S.loadT=0.33; else S.loadT=0.2; }
+  }else if(z!=='cylinder') S.loadT=0;
+}
+
+// ============================================================
+//  LÖVÉS
+// ============================================================
+// FONTOS: a burst() és a smokePuff() belül a közös _a vektort használja,
+// ezért a torkolat helyét és irányát SAJÁT vektorokban kell tartani —
+// különben mire a találatvizsgálathoz érünk, már felül vannak írva.
+const _mz=new THREE.Vector3(), _md=new THREE.Vector3(),
+      _gap=new THREE.Vector3(), _gapD=new THREE.Vector3(), _imp=new THREE.Vector3();
+function shoot(){
+  S.gun.updateMatrixWorld(true);
+  muzzlePos(_mz); muzzleDir(_md);
+  S.shots++;
+  S.recoilV+=CFG.recoilKick*34;
+
+  // torkolattűz és füst
+  burst(_mz,0xfff0c0,26,7.0,1.5,_md);
+  burst(_mz,0xff9a3a,14,4.2,1.0,_md);
+  smokePuff(_mz,_md,10);
+  // gázszökés a dob és a cső résében — valódi revolvernél ez látványos
+  _gap.set(0,0.0234,-0.0425).applyMatrix4(S.gun.matrixWorld);
+  S.gun.getWorldQuaternion(_q);
+  _gapD.set(1,0.25,0).applyQuaternion(_q).normalize();
+  smokePuff(_gap,_gapD,7);
+  smokePuff(_gap,_gapD.clone().negate(),7);
+
+  if(S.flash){ S.flash.position.copy(_mz); S.flashT=0.045; }
+
+  // találat
+  RAY.set(_mz,_md);
+  let best=null,bd=1e9;
+  for(const t of S.targets){
+    if(t.down) continue;
+    t.plate.updateWorldMatrix(true,false);
+    const hit=RAY.intersectObject(t.plate,false);
+    if(hit.length&&hit[0].distance<bd){bd=hit[0].distance;best={t,p:hit[0].point.clone()};}
+  }
+  if(best){
+    S.hits++;
+    best.t.down=true; best.t.vel=-5.5;
+    burst(best.p,0xffd9a0,22,4,3.0);
+    sfx('ping',best.p,0.75);
+    S.score+=100;
+  }else{
+    _imp.copy(_mz).addScaledVector(_md,26);
+    burst(_imp,0x8a8378,12,2.5,3.0);
+  }
+  // nyomjelző
+  tracer(_mz,_md);
+  sfx('shot',_mz,1.0);
+  haptic(S.gunHand,1.0,120);
+  haptic(S.offHand,0.5,70);
+}
+const RAY=new THREE.Raycaster();RAY.far=60;
+function tracer(p,d){
+  const tr=S.tracers[S.tracerHead];
+  S.tracerHead=(S.tracerHead+1)%S.tracers.length;
+  tr.life=0.07;
+  tr.mesh.visible=true;
+  tr.mesh.position.copy(p).addScaledVector(d,13);
+  tr.mesh.quaternion.setFromUnitVectors(ZAX,d);
+  tr.mesh.scale.set(1,1,26);
+}
+function buildTracers(){
+  S.tracers=[];S.tracerHead=0;
+  const geo=new THREE.CylinderGeometry(0.0016,0.0016,1,5,1,true);geo.rotateX(Math.PI/2);
+  for(let i=0;i<4;i++){
+    const m=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:0xfff2cc,transparent:true,
+      opacity:0.55,blending:THREE.AdditiveBlending,depthWrite:false}));
+    m.visible=false;S.scene.add(m);
+    S.tracers.push({mesh:m,life:0});
+  }
+}
+function updateTracers(dt){
+  for(const t of S.tracers){
+    if(t.life<=0)continue;
+    t.life-=dt;
+    t.mesh.material.opacity=Math.max(0,t.life/0.07)*0.55;
+    if(t.life<=0)t.mesh.visible=false;
+  }
+}
+
+// ============================================================
+//  RÉSZECSKÉK ÉS FÜST
+// ============================================================
+function buildParticles(){
+  const mk=(n,size,op,blend)=>{
+    const geo=new THREE.BufferGeometry();
+    const pos=new Float32Array(n*3),col=new Float32Array(n*3);
+    geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+    geo.setAttribute('color',new THREE.BufferAttribute(col,3));
+    const pts=new THREE.Points(geo,new THREE.PointsMaterial({size,vertexColors:true,
+      transparent:true,opacity:op,blending:blend,depthWrite:false,sizeAttenuation:true}));
+    pts.frustumCulled=false;S.scene.add(pts);
+    for(let i=0;i<n;i++)pos[i*3+1]=-999;
+    return {pts,geo,pos,col,n,head:0,vel:new Float32Array(n*3),
+            life:new Float32Array(n),max:new Float32Array(n),g:new Float32Array(n)};
+  };
+  S.parts3=mk(CFG.maxParticles,0.006,0.95,THREE.AdditiveBlending);
+  S.smoke=mk(420,0.075,0.30,THREE.NormalBlending);
+}
+function emit(P,p,color,count,speed,grav,dir,spread){
+  _col.set(color);
+  for(let k=0;k<count;k++){
+    const i=P.head;P.head=(P.head+1)%P.n;
+    P.pos[i*3]=p.x;P.pos[i*3+1]=p.y;P.pos[i*3+2]=p.z;
+    _a.set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).normalize();
+    if(dir)_a.lerp(dir,spread===undefined?0.72:spread).normalize();
+    _a.multiplyScalar(speed*(0.25+Math.random()));
+    P.vel[i*3]=_a.x;P.vel[i*3+1]=_a.y;P.vel[i*3+2]=_a.z;
+    P.col[i*3]=_col.r;P.col[i*3+1]=_col.g;P.col[i*3+2]=_col.b;
+    P.g[i]=grav;P.max[i]=0.25+Math.random()*0.5;P.life[i]=P.max[i];
+  }
+}
+function burst(p,c,n,sp,g,dir){ emit(S.parts3,p,c,n,sp,g===undefined?9:g,dir); }
+function smokePuff(p,dir,n){
+  _col.setHSL(0,0,0.62);
+  for(let k=0;k<n;k++){
+    const P=S.smoke,i=P.head;P.head=(P.head+1)%P.n;
+    P.pos[i*3]=p.x;P.pos[i*3+1]=p.y;P.pos[i*3+2]=p.z;
+    _a.set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).normalize().lerp(dir,0.55).normalize();
+    _a.multiplyScalar(0.7+Math.random()*2.1);
+    P.vel[i*3]=_a.x;P.vel[i*3+1]=_a.y+0.25;P.vel[i*3+2]=_a.z;
+    const v=0.48+Math.random()*0.22;
+    P.col[i*3]=v;P.col[i*3+1]=v;P.col[i*3+2]=v*0.98;
+    P.g[i]=-0.22;                       // a lőporfüst felszáll
+    P.max[i]=1.1+Math.random()*1.3;P.life[i]=P.max[i];
+  }
+}
+function stepP(P,dt,drag){
+  for(let i=0;i<P.n;i++){
+    if(P.life[i]<=0)continue;
+    P.life[i]-=dt;
+    if(P.life[i]<=0){P.pos[i*3+1]=-999;continue;}
+    P.vel[i*3+1]-=P.g[i]*dt;
+    if(drag){const k=1-drag*dt;P.vel[i*3]*=k;P.vel[i*3+1]*=k;P.vel[i*3+2]*=k;}
+    P.pos[i*3]+=P.vel[i*3]*dt;P.pos[i*3+1]+=P.vel[i*3+1]*dt;P.pos[i*3+2]+=P.vel[i*3+2]*dt;
+    if(P.pos[i*3+1]<0.01&&P.g[i]>0){P.pos[i*3+1]=0.01;P.vel[i*3+1]*=-0.28;
+      P.vel[i*3]*=0.6;P.vel[i*3+2]*=0.6;}
+    const f=P.life[i]/P.max[i];
+    if(f<0.5){const k=0.94;P.col[i*3]*=k;P.col[i*3+1]*=k;P.col[i*3+2]*=k;}
+  }
+  P.geo.attributes.position.needsUpdate=true;
+  P.geo.attributes.color.needsUpdate=true;
+}
+
+// ============================================================
+//  HÜVELYEK
+// ============================================================
+function buildCasings(){
+  S.casings=[];
+  for(let i=0;i<CFG.maxCasings;i++){
+    const m=makeRound(true);
+    m.visible=false;S.scene.add(m);
+    S.casings.push({m,vel:new THREE.Vector3(),spin:new THREE.Vector3(),life:0});
+  }
+  S.casingHead=0;
+}
+function spawnCasing(pos,spent){
+  const c=S.casings[S.casingHead];
+  S.casingHead=(S.casingHead+1)%S.casings.length;
+  c.m.visible=true;c.life=14;
+  c.m.position.copy(pos);
+  c.m.rotation.set(Math.random()*6.3,Math.random()*6.3,Math.random()*6.3);
+  c.vel.set((Math.random()-0.5)*0.8,0.6+Math.random()*0.7,(Math.random()-0.5)*0.8);
+  c.spin.set((Math.random()-0.5)*16,(Math.random()-0.5)*16,(Math.random()-0.5)*16);
+}
+function updateCasings(dt){
+  for(const c of S.casings){
+    if(c.life<=0)continue;
+    c.life-=dt;
+    if(c.life<=0){c.m.visible=false;continue;}
+    c.vel.y-=9.81*dt;
+    c.m.position.addScaledVector(c.vel,dt);
+    c.m.rotation.x+=c.spin.x*dt;c.m.rotation.y+=c.spin.y*dt;c.m.rotation.z+=c.spin.z*dt;
+    const floor=(Math.abs(c.m.position.x)<1.1&&c.m.position.z>-0.9&&c.m.position.z<0.9)?0.92:0.0;
+    if(c.m.position.y<floor+0.005){
+      c.m.position.y=floor+0.005;
+      if(c.vel.y<-0.25){
+        c.vel.y*=-0.34;c.vel.x*=0.62;c.vel.z*=0.62;c.spin.multiplyScalar(0.55);
+        sfx('clink',c.m.position,0.30);
+      }else{c.vel.set(0,0,0);c.spin.multiplyScalar(0.8);}
+    }
+  }
+}
+
+// ============================================================
+//  CÉLOK
+// ============================================================
+function buildTargets(){
+  const dists=[7,7,12,12,18,25];
+  const xs=[-1.5,1.5,-2.6,2.6,0,1.0];
+  for(let i=0;i<dists.length;i++){
+    const g=new THREE.Group();
+    g.position.set(xs[i],0,-dists[i]);
+    S.scene.add(g);
+    const r=dists[i]<10?0.15:(dists[i]<20?0.19:0.24);
+    const post=new THREE.Mesh(new THREE.CylinderGeometry(0.025,0.030,1.15,10),
+      new THREE.MeshStandardMaterial({color:0x2e3238,metalness:0.7,roughness:0.55}));
+    post.position.y=0.575;g.add(post);
+    const pivot=new THREE.Group();pivot.position.y=1.15;g.add(pivot);
+    const plate=new THREE.Mesh(new THREE.CylinderGeometry(r,r,0.016,28),
+      new THREE.MeshStandardMaterial({color:0xd8d2c4,metalness:0.85,roughness:0.42,envMapIntensity:1.2}));
+    plate.rotation.x=Math.PI/2;plate.position.y=r*0.9;pivot.add(plate);
+    const ring=new THREE.Mesh(new THREE.TorusGeometry(r*0.55,r*0.07,8,26),
+      new THREE.MeshStandardMaterial({color:0xc2452f,metalness:0.4,roughness:0.6}));
+    ring.position.set(0,r*0.9,-0.010);pivot.add(ring);
+    S.targets.push({g,pivot,plate,down:false,vel:0,ang:0,t:0,dist:dists[i]});
+  }
+}
+function updateTargets(dt){
+  for(const t of S.targets){
+    if(t.down){
+      t.vel+=(-8-t.vel)*Math.min(1,6*dt);
+      t.ang+=t.vel*dt;
+      if(t.ang<-1.42){t.ang=-1.42;t.vel=0;t.t+=dt;
+        if(t.t>3.2){t.down=false;t.t=0;t.vel=6;}}
+    }else if(t.ang<0){
+      t.ang+=6*dt;
+      if(t.ang>=0){t.ang=0;t.vel=0;}
+    }
+    t.pivot.rotation.x=t.ang;
+  }
+}
+
+// ============================================================
+//  LŐTÉR
+// ============================================================
+function buildRange(){
+  const floorMat=new THREE.MeshStandardMaterial({color:0x2a2c30,roughness:0.92,metalness:0.05});
+  const floor=new THREE.Mesh(new THREE.PlaneGeometry(40,80),floorMat);
+  floor.rotation.x=-Math.PI/2;S.scene.add(floor);
+  // állás, ahol a lövő van
+  const pad=new THREE.Mesh(new THREE.BoxGeometry(4.2,0.06,3.2),
+    new THREE.MeshStandardMaterial({color:0x3a3d42,roughness:0.85}));
+  pad.position.set(0,0.03,0.9);S.scene.add(pad);
+  // oldalfalak és hátfal
+  const wallMat=new THREE.MeshStandardMaterial({color:0x1b1d21,roughness:0.9});
+  for(const sx of [-1,1]){
+    const w=new THREE.Mesh(new THREE.BoxGeometry(0.3,4.5,64),wallMat);
+    w.position.set(sx*6.4,2.25,-28);S.scene.add(w);
+  }
+  const back=new THREE.Mesh(new THREE.BoxGeometry(13,5.5,0.4),wallMat);
+  back.position.set(0,2.75,-32);S.scene.add(back);
+  const ceil=new THREE.Mesh(new THREE.BoxGeometry(13,0.3,64),wallMat);
+  ceil.position.set(0,4.6,-28);S.scene.add(ceil);
+  // hátsó fal a lövő mögött
+  const rear=new THREE.Mesh(new THREE.BoxGeometry(13,4.5,0.4),wallMat);
+  rear.position.set(0,2.25,5);S.scene.add(rear);
+
+  // munkapad
+  const woodM=new THREE.MeshStandardMaterial({map:woodTexture(),roughness:0.62,metalness:0.0,
+    color:0x9a7048,envMapIntensity:0.5});
+  const bench=new THREE.Mesh(new THREE.BoxGeometry(2.3,0.072,0.78),woodM);
+  bench.position.set(0,0.90,-0.30);S.scene.add(bench);
+  for(const sx of [-1,1])for(const sz of [-1,1]){
+    const leg=new THREE.Mesh(new THREE.BoxGeometry(0.07,0.90,0.07),
+      new THREE.MeshStandardMaterial({color:0x33363b,metalness:0.6,roughness:0.6}));
+    leg.position.set(sx*1.05,0.45,-0.30+sz*0.32);S.scene.add(leg);
+  }
+  // állvány a fegyvernek
+  const stand=new THREE.Group();
+  stand.position.set(0,0.936,-0.28);
+  S.scene.add(stand);
+  S.stand=stand;
+  const cloth=new THREE.Mesh(new THREE.BoxGeometry(0.42,0.008,0.26),
+    new THREE.MeshStandardMaterial({color:0x232a33,roughness:0.95}));
+  stand.add(cloth);
+
+  // világítás: két irányított lámpa + a környezettérkép
+  const key=new THREE.DirectionalLight(0xfff0dd,2.2);key.position.set(1.6,3.4,1.4);S.scene.add(key);
+  const fill=new THREE.DirectionalLight(0xbcd0ff,0.7);fill.position.set(-2.2,2.4,-1.8);S.scene.add(fill);
+  S.scene.add(new THREE.AmbientLight(0xffffff,0.28));
+  for(let i=0;i<5;i++){
+    const l=new THREE.PointLight(0xfff2d8,6,14,2);
+    l.position.set(0,4.2,-2-i*7);S.scene.add(l);
+    const fx=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.08,0.3),
+      new THREE.MeshBasicMaterial({color:0xfff2d8}));
+    fx.position.set(0,4.35,-2-i*7);S.scene.add(fx);
+  }
+  // torkolattűz fénye
+  S.flash=new THREE.PointLight(0xffd07a,0,4,2);S.scene.add(S.flash);S.flashT=0;
+  buildTracers();
+}
+
+// ============================================================
+//  HANG
+//  A lövés négy rétegből áll, és mindent átenged egy szintetizált
+//  teremvisszhangon — enélkül a lőtér tere hiányzik.
+// ============================================================
+function initAudio(){
+  if(S.audio)return;
+  const Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return;
+  try{
+    const ctx=new Ctx();
+    const comp=ctx.createDynamicsCompressor();
+    comp.threshold.value=-13;comp.knee.value=18;comp.ratio.value=8;
+    comp.attack.value=0.003;comp.release.value=0.19;
+    const master=ctx.createGain();master.gain.value=0.72;
+    comp.connect(master);master.connect(ctx.destination);
+    const dry=ctx.createGain();dry.gain.value=1.0;dry.connect(comp);
+
+    // impulzusválasz: exponenciálisan lecsengő zaj, betonterem jellegű
+    const len=Math.floor(ctx.sampleRate*1.7);
+    const ir=ctx.createBuffer(2,len,ctx.sampleRate);
+    for(let ch=0;ch<2;ch++){
+      const d=ir.getChannelData(ch);
+      for(let i=0;i<len;i++){
+        const t=i/len;
+        d[i]=(Math.random()*2-1)*Math.pow(1-t,2.6)*(1-Math.exp(-i/600));
+      }
+    }
+    const conv=ctx.createConvolver();conv.buffer=ir;
+    const wet=ctx.createGain();wet.gain.value=0.30;
+    const send=ctx.createGain();send.gain.value=1.0;
+    send.connect(conv);conv.connect(wet);wet.connect(comp);
+
+    const nb=ctx.createBuffer(1,ctx.sampleRate*1.2,ctx.sampleRate);
+    const nd=nb.getChannelData(0);
+    for(let i=0;i<nd.length;i++)nd[i]=Math.random()*2-1;
+    S.audio={ctx,comp,master,dry,send,noise:nb};
+  }catch(e){S.audio=null;}
+}
+function pan(p,sendAmt){
+  const {ctx,dry,send}=S.audio;
+  const n=ctx.createPanner();
+  n.panningModel='HRTF';n.distanceModel='inverse';n.refDistance=0.5;n.maxDistance=40;
+  if(n.positionX){n.positionX.value=p.x;n.positionY.value=p.y;n.positionZ.value=p.z;}
+  else if(n.setPosition)n.setPosition(p.x,p.y,p.z);
+  n.connect(dry);
+  if(sendAmt>0){const g=ctx.createGain();g.gain.value=sendAmt;n.connect(g);g.connect(send);}
+  return n;
+}
+function tone(d,type,f0,f1,t,dur,vol,lin){
+  const {ctx}=S.audio,o=ctx.createOscillator(),g=ctx.createGain();
+  o.type=type;o.frequency.setValueAtTime(f0,t);
+  if(f1&&f1!==f0){ if(lin)o.frequency.linearRampToValueAtTime(f1,t+dur);
+                   else o.frequency.exponentialRampToValueAtTime(Math.max(18,f1),t+dur); }
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol,t+0.003);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g);g.connect(d);o.start(t);o.stop(t+dur+0.02);
+}
+function nz(d,t,dur,vol,type,f0,f1,q,atk){
+  const {ctx,noise}=S.audio,s=ctx.createBufferSource(),f=ctx.createBiquadFilter(),g=ctx.createGain();
+  s.buffer=noise;s.playbackRate.value=0.8+Math.random()*0.4;
+  f.type=type;f.Q.value=q||1;f.frequency.setValueAtTime(f0,t);
+  if(f1)f.frequency.exponentialRampToValueAtTime(Math.max(40,f1),t+dur);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol,t+(atk||0.002));
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  s.connect(f);f.connect(g);g.connect(d);s.start(t);s.stop(t+dur+0.02);
+}
+function sfx(kind,p,vol){
+  if(!S.audio||S.sfxN>=10)return;S.sfxN++;
+  const t=S.audio.ctx.currentTime,v=vol===undefined?0.5:vol;
+  const d=pan(p,kind==='shot'?0.85:(kind==='ping'?0.5:0.16));
+  switch(kind){
+    case 'shot':
+      nz(d,t,0.010,v*1.0,'highpass',3400,3400,0.7,0.0008);   // tranziens
+      tone(d,'sine',300,52,t,0.11,v*0.95);                    // test
+      nz(d,t,0.075,v*0.85,'bandpass',1500,420,0.9);           // durranás
+      nz(d,t+0.012,0.55,v*0.30,'lowpass',2400,180,0.8,0.02);  // elhaló farok
+      break;
+    case 'cock':                                              // a klasszikus kettős kattanás
+      nz(d,t,0.016,v*0.55,'bandpass',2600,1800,4,0.001);
+      tone(d,'square',1500,900,t,0.014,v*0.30);
+      nz(d,t+0.085,0.020,v*0.70,'bandpass',3100,1500,5,0.001);
+      tone(d,'square',1900,1000,t+0.085,0.016,v*0.38);
+      break;
+    case 'ratchet': nz(d,t,0.012,v*0.5,'bandpass',2800,2000,6,0.001); break;
+    case 'dry':     nz(d,t,0.014,v*0.8,'bandpass',2200,1200,4,0.0008);
+                    tone(d,'square',1100,600,t,0.018,v*0.5); break;
+    case 'open':    nz(d,t,0.09,v*0.55,'bandpass',900,420,2.2,0.004);
+                    tone(d,'triangle',420,240,t,0.10,v*0.32); break;
+    case 'close':   nz(d,t,0.035,v*0.8,'bandpass',1700,700,3,0.001);
+                    tone(d,'square',900,420,t,0.026,v*0.5); break;
+    case 'eject':   nz(d,t,0.14,v*0.7,'bandpass',1400,500,1.6,0.003);
+                    tone(d,'triangle',520,180,t,0.12,v*0.35); break;
+    case 'load':    nz(d,t,0.020,v*0.55,'bandpass',2000,900,3,0.001);
+                    tone(d,'sine',720,380,t,0.030,v*0.35); break;
+    case 'clink':   tone(d,'triangle',2400+Math.random()*900,900,t,0.10,v*0.5);
+                    nz(d,t,0.05,v*0.3,'highpass',3000); break;
+    case 'ping':    tone(d,'sine',1180,980,t,0.75,v*0.55);
+                    tone(d,'sine',1790,1520,t,0.55,v*0.30);
+                    tone(d,'sine',2670,2380,t,0.35,v*0.16);
+                    nz(d,t,0.05,v*0.35,'bandpass',4200,2400,5); break;
+    case 'handle':  nz(d,t,0.05,v*0.4,'bandpass',900,500,2,0.004); break;
+  }
+}
+function listener(){
+  if(!S.audio)return;
+  const l=S.audio.ctx.listener;
+  _b.set(0,0,-1).applyQuaternion(S.headQ);_c.set(0,1,0).applyQuaternion(S.headQ);
+  if(l.positionX){l.positionX.value=S.head.x;l.positionY.value=S.head.y;l.positionZ.value=S.head.z;
+    l.forwardX.value=_b.x;l.forwardY.value=_b.y;l.forwardZ.value=_b.z;
+    l.upX.value=_c.x;l.upY.value=_c.y;l.upZ.value=_c.z;}
+  else if(l.setPosition){l.setPosition(S.head.x,S.head.y,S.head.z);
+    l.setOrientation(_b.x,_b.y,_b.z,_c.x,_c.y,_c.z);}
+}
+
+// ============================================================
+//  KIJELZŐ ÉS ALKATRÉSZNEVEK
+// ============================================================
+function mkPanel(w,h,px,py){
+  const c=document.createElement('canvas');c.width=px;c.height=py;
+  const tex=new THREE.CanvasTexture(c);
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h),
+    new THREE.MeshBasicMaterial({map:tex,transparent:true,depthTest:false,depthWrite:false}));
+  m.renderOrder=15;S.scene.add(m);
+  return {ctx:c.getContext('2d'),tex,mesh:m};
+}
+function buildHud(){
+  S.hud=mkPanel(0.52,0.16,1024,320);
+  S.banner=mkPanel(0.9,0.24,1024,260);S.banner.mesh.visible=false;S.banner.t=0;
+}
+function rr(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);
+  g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+const ZONE_HINT={hammer:'ravasz: kakas felhúzása',
+  cylinder:'markolat: dob ki/be · ravasz: töltés',ejector:'ravasz: ürítés'};
+function drawHud(dt){
+  const g=S.hud.ctx;
+  g.clearRect(0,0,1024,320);
+  g.fillStyle='rgba(7,9,12,0.82)';rr(g,0,0,1024,320,26);g.fill();
+  g.textBaseline='middle';
+
+  // a dob állapota: hat kamra felülnézetből
+  const cx=130,cy=150,R=88;
+  g.strokeStyle='#3a3f46';g.lineWidth=4;
+  g.beginPath();g.arc(cx,cy,R+22,0,6.3);g.stroke();
+  for(let i=0;i<D.rounds;i++){
+    const a=-Math.PI/2+i/D.rounds*Math.PI*2;
+    const x=cx+Math.cos(a)*R, y=cy+Math.sin(a)*R;
+    const st=S.chambers[i];
+    g.beginPath();g.arc(x,y,20,0,6.3);
+    g.fillStyle=st==='live'?'#d8a93f':(st==='spent'?'#5c5142':'#15181d');
+    g.fill();
+    g.strokeStyle=i===S.cylIndex?'#c8a15a':'#2b3038';
+    g.lineWidth=i===S.cylIndex?5:3;g.stroke();
+  }
+  g.fillStyle='#c8a15a';g.font='800 30px Inter,system-ui,sans-serif';
+  g.textAlign='center';g.fillText(loadedCount()+'/6',cx,cy);
+
+  g.textAlign='left';
+  const L=278;
+  g.fillStyle='#8b857c';g.font='700 24px Inter,system-ui,sans-serif';
+  g.fillText(S.cocked?'KAKAS FELHÚZVA':(S.cylOpen>0.5?'DOB NYITVA':'ÜZEMKÉSZ'),L,44);
+  g.fillStyle='#f0ece6';g.font='800 56px Inter,system-ui,sans-serif';
+  g.fillText(S.score.toLocaleString('hu'),L,96);
+
+  // ravaszút csíkja — látod, hol csattan el
+  const bw=430,bx=L,by=148,bh=20;
+  g.fillStyle='#15181d';rr(g,bx,by,bw,bh,10);g.fill();
+  g.fillStyle=S.cocked?'#6ee7a0':'#c8a15a';
+  rr(g,bx,by,Math.max(4,bw*Math.min(1,S.trig)),bh,10);g.fill();
+  const br=(S.cocked?CFG.saBreak:CFG.triggerBreak)*bw;
+  g.strokeStyle='#ff6a6a';g.lineWidth=3;
+  g.beginPath();g.moveTo(bx+br,by-6);g.lineTo(bx+br,by+bh+6);g.stroke();
+  g.fillStyle='#8b857c';g.font='700 20px Inter,system-ui,sans-serif';
+  g.fillText('RAVASZÚT',bx,by+44);
+
+  const acc=S.shots?Math.round(S.hits/S.shots*100):0;
+  g.textAlign='right';
+  g.fillStyle='#8b857c';g.font='700 24px Inter,system-ui,sans-serif';
+  g.fillText(S.hits+' / '+S.shots+'  ·  '+acc+'%',994,44);
+  if(S.zone){
+    g.fillStyle='#c8a15a';g.font='700 26px Inter,system-ui,sans-serif';
+    g.fillText(ZONE_HINT[S.zone]||'',994,268);
+  }
+  S.hud.tex.needsUpdate=true;
+}
+function banner(t,s,col,secs){
+  const B=S.banner,g=B.ctx;g.clearRect(0,0,1024,260);
+  g.textAlign='center';g.textBaseline='middle';
+  g.fillStyle=col||'#c8a15a';g.font='800 92px Inter,system-ui,sans-serif';g.fillText(t,512,96);
+  if(s){g.fillStyle='#bdb6ab';g.font='700 36px Inter,system-ui,sans-serif';g.fillText(s,512,190);}
+  B.tex.needsUpdate=true;B.mesh.visible=true;B.t=secs||2;
+}
+function followHead(p,dt,dist,drop,sp){
+  _a.copy(S.fwd).multiplyScalar(dist).add(S.head);_a.y-=drop;
+  p.mesh.position.lerp(_a,Math.min(1,dt*(sp||3.4)));
+  p.mesh.lookAt(S.head);
+}
+// alkatrésznevek
+function buildLabels(){
+  S.labels=[];
+  for(const m of S.parts.list){
+    const c=document.createElement('canvas');c.width=512;c.height=76;
+    const g=c.getContext('2d');
+    g.fillStyle='rgba(8,10,13,0.86)';rr(g,0,0,512,76,16);g.fill();
+    g.fillStyle='#c8a15a';g.font='700 40px Inter,system-ui,sans-serif';
+    g.textAlign='center';g.textBaseline='middle';
+    g.fillText(m.name,256,40);
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),
+      transparent:true,depthTest:false}));
+    sp.scale.set(0.085,0.0126,1);sp.visible=false;sp.renderOrder=30;
+    S.scene.add(sp);
+    S.labels.push({sp,src:m});
+  }
+}
+function updateLabels(){
+  if(!S.labels)return;
+  for(const l of S.labels){
+    l.sp.visible=S.labelsOn&&!!S.heldBy;
+    if(!l.sp.visible)continue;
+    l.src.getWorldPosition(_a);
+    _a.y+=0.035;
+    l.sp.position.copy(_a);
+  }
+}
+
+// ============================================================
+//  KÉPKOCKA
+// ============================================================
+const _hm=new THREE.Matrix4(),_hs=new THREE.Vector3();
+function updateHead(frame){
+  if(frame&&S.renderer.xr.isPresenting){
+    const rs=S.renderer.xr.getReferenceSpace();
+    if(rs){
+      const pose=frame.getViewerPose(rs);
+      if(pose){
+        S.rig.updateMatrixWorld(true);
+        _hm.fromArray(pose.transform.matrix);
+        _hm.premultiply(S.rig.matrixWorld);
+        _hm.decompose(S.head,S.headQ,_hs);
+        return;
+      }
+    }
+  }
+  S.camera.updateMatrixWorld(true);
+  S.camera.getWorldPosition(S.head);
+  S.camera.getWorldQuaternion(S.headQ);
+}
+let fpsA=0,fpsN=0;
+function tick(time,frame){
+  const dt=Math.min(S.clock.getDelta(),0.05);
+  S.sfxN=0;
+  fpsA+=dt;fpsN++;
+  if(fpsA>0.5){S.stats.fps=Math.round(fpsN/fpsA);fpsA=0;fpsN=0;}
+
+  updateHead(frame);
+  S.fwd.set(0,0,-1).applyQuaternion(S.headQ);
+  S.fwd.y*=0.25;
+  if(S.fwd.lengthSq()<1e-6)S.fwd.set(0,0,-1);
+  S.fwd.normalize();
+
+  if(S.phase==='play'){
+    locomotion(dt);
+    if(btnDown(S.gunHand,1)){ if(S.heldBy) release(); else tryGrab(); }
+    if(btnDown(S.gunHand,4)||btnDown(S.gunHand,5)){
+      S.labelsOn=!S.labelsOn;
+      banner(S.labelsOn?'ALKATRÉSZEK':'','', '#c8a15a',1.1);
+    }
+    handleOffHand(dt);
+    updateMechanism(dt);
+  }
+
+  // visszarúgás: a markolat körül emelkedik a cső
+  if(S.heldBy){
+    S.gun.rotation.x=S.gunBaseRotX-S.recoil*0.62;
+    S.gun.position.z=S.gunBaseZ+S.recoil*0.012;
+  }
+  if(S.flashT>0){ S.flashT-=dt; S.flash.intensity=Math.max(0,S.flashT/0.045)*22; }
+  else S.flash.intensity=0;
+
+  stepP(S.parts3,dt,1.2);
+  stepP(S.smoke,dt,0.9);
+  updateCasings(dt);
+  updateTargets(dt);
+  updateTracers(dt);
+  updateLabels();
+
+  if(S.fade>0)S.fade-=dt;
+  S.vig.material.uniforms.amt.value=Math.max(S.vigAmt,S.fade>0?1:0);
+
+  drawHud(dt);
+  followHead(S.hud,dt,0.95,0.40,3.6);
+  if(S.banner.t>0){
+    S.banner.t-=dt;
+    followHead(S.banner,dt,1.9,-0.22,2.6);
+    if(S.banner.t<=0)S.banner.mesh.visible=false;
+  }
+  if(!S.renderer.xr.isPresenting){
+    const t=performance.now()*0.00018;
+    S.camera.position.set(Math.sin(t)*0.75,1.22,-0.28+Math.cos(t)*0.75);
+    S.camera.lookAt(0,1.0,-0.28);
+  }
+  listener();
+  S.renderer.info.reset();
+  S.renderer.render(S.scene,S.camera);
+  S.stats.calls=S.renderer.info.render.calls;
+  S.stats.tris=S.renderer.info.render.triangles;
+}
+
+// ============================================================
+//  SESSION
+// ============================================================
+let inFrame=false;try{inFrame=window.self!==window.top;}catch(e){inFrame=true;}
+const ATT=[{mode:'immersive-vr',opts:{optionalFeatures:['local-floor','bounded-floor']}},
+           {mode:'immersive-vr',opts:undefined}];
+function caps(list){capsEl.innerHTML=list.map(([l,s])=>'<span class="cap '+(s||'')+'">'+l+'</span>').join('');}
+function onSession(session){
+  S.session=session;
+  try{S.granted=session.enabledFeatures?Array.from(session.enabledFeatures):[];}catch(e){S.granted=[];}
+  caps([['teljes VR','on'],['padlószint',S.granted.indexOf('local-floor')>=0?'on':'off']]);
+  uiEl.style.display='none';
+  S.phase='play';
+  session.addEventListener('end',()=>{
+    S.session=null;S.phase='menu';
+    if(S.heldBy)release();
+    uiEl.style.display='flex';
+    statusEl.textContent='Kiléptél. Bármikor visszamehetsz.';
+  });
+  const sp=['local-floor','local'];
+  (function t(i){
+    if(i>=sp.length){S.renderer.xr.setSession(session);start();return;}
+    session.requestReferenceSpace(sp[i]).then(()=>{
+      S.renderer.xr.setReferenceSpaceType(sp[i]);
+      if(sp[i]==='local')S.rig.position.y=-1.2;
+      S.renderer.xr.setSession(session);start();
+    }).catch(()=>t(i+1));
+  })(0);
+}
+function start(){
+  S.rig.position.set(0,S.rig.position.y||0,0.55);S.rig.rotation.y=0;
+  S.score=0;S.shots=0;S.hits=0;
+  resetChambers(true);
+  banner('REVOLVER','markolat gombbal vedd fel','#c8a15a',3.0);
+}
+function attempt(i,err){
+  if(i>=ATT.length){
+    statusEl.textContent=inFrame?'Beágyazott nézetben nincs headset-hozzáférés. Nyisd meg külön fülön.'
+      :'Nem indult el: '+(err&&err.message?err.message:'ismeretlen hiba')+' — nyomd meg még egyszer.';
+    return;
+  }
+  const a=ATT[i];let p;
+  try{p=a.opts?navigator.xr.requestSession(a.mode,a.opts):navigator.xr.requestSession(a.mode);}
+  catch(e){attempt(i+1,e);return;}
+  p.then(onSession).catch(e=>attempt(i+1,e));
+}
+function startSession(){
+  if(!navigator.xr){statusEl.textContent='Nincs WebXR ezen a lapon. Nyisd meg a Quest böngészőjében.';return;}
+  initAudio();
+  if(S.audio&&S.audio.ctx.state==='suspended')S.audio.ctx.resume().catch(()=>{});
+  statusEl.textContent='Indítás…';
+  attempt(0,null);
+}
+function probe(){
+  const sec=window.isSecureContext===true;
+  const base=[['biztonságos kontextus',sec?'on':'off'],['WebXR',navigator.xr?'on':'off'],
+              ['keretben: '+(inFrame?'igen':'nem'),inFrame?'off':'on']];
+  caps(base);
+  if(!navigator.xr){statusEl.textContent=inFrame?'Beágyazott nézetben nincs headset-hozzáférés. Nyisd meg külön fülön.'
+    :'Ez a böngésző nem támogatja a WebXR-t. Nyisd meg a Quest böngészőjében.';return;}
+  let done=false;
+  setTimeout(()=>{if(!done){statusEl.textContent='Az ellenőrzés nem válaszolt — próbáld meg a belépést.';enterEl.disabled=false;}},2500);
+  navigator.xr.isSessionSupported('immersive-vr').then(vr=>{
+    done=true;caps(base.concat([['immersive-vr',vr?'on':'off']]));
+    if(vr){statusEl.textContent='Quest észlelve — teljes VR módban indul.';enterEl.disabled=false;}
+    else statusEl.textContent='Nincs elérhető headset ezen az eszközön.';
+  }).catch(e=>{done=true;statusEl.textContent='Ellenőrzési hiba: '+e.message;enterEl.disabled=false;});
+}
+try{ init(); buildLabels(); probe(); }
+catch(e){ statusEl.textContent='Indítási hiba: '+e.message; console.error(e); }
+enterEl.addEventListener('click',startSession);
+</script>
+</body>
+</html>

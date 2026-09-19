@@ -128,6 +128,7 @@ python3 -m http.server 8080 --bind 127.0.0.1
 | `/game` | **Zárótűz** — pisztoly + pajzs, telegrafált támadások, 5 ellenféltípus |
 | `/prizma` | **Prizma** — teljes VR műhely: járkálás, 4 zóna, pályaépítő, 4 fegyver |
 | `/varos` | **Város** — nyílt világ: 952 épület, forgalom, robot járókelők, rendőrség |
+| `/revolver` | **Revolver** — mechanikai tanulmány működő dupla akciós szerkezettel |
 
 A `lab/` a Quest 3 fejlettebb WebXR-képességeit használja, mindet
 *opcionálisan*: nincs egyetlen `requiredFeature` sem, így ha valamelyik nem
@@ -379,7 +380,58 @@ a napszakkal gyulladnak ki.
 
 Terhelés alatt: **23 rajzolási hívás, 142 042 háromszög.**
 
+### Revolver (`/revolver`)
+
+Egy 4 hüvelykes szervizrevolver **működő mechanikával**, valós arányokkal.
+109 alkatrészből áll, ebből 17 megnevezve (az A/X gombbal kiírhatók).
+
+### A mechanika
+A ravasz a Quest kontrollerén **analóg**, és ezt használjuk ki:
+
+- **dupla akció**: ahogy húzod, úgy emelkedik a kakas *és* fordul a dob;
+  86%-os ravaszútnál a kakas elszabadul és elcsattan
+- **egyszeres akció**: a bal kézzel felhúzod a kakast — a dob azonnal fordul
+  egy kamrát —, és onnantól a ravasz **34%-nál** sül el, sokkal rövidebb úton
+- a dob pontosan **60 fokot** fordul lövésenként, hat kamrával
+- **kifordítható dob**: nyitva a szerkezet blokkolva van, ahogy a valóságban
+- **kiürítő rúd**: a hüvelyek kirepülnek és a földön pattannak
+- töltés kamránként, éles és kilőtt töltény külön megjelenéssel
+- üres kamrán csak **kattan**
+
+### A modell
+- a **cső a felső kamra vonalában** van, nem a dob tengelyén — ez a revolver
+  egyik legjellegzetesebb vonása
+- hornyolt dob **átfúrt kamrákkal** (kihúzott keresztmetszet lyukakkal)
+- hatágú **huzagolás** a furatban, a torkolatba nézve látszik
+- szellőzött sín, alsó tok, kivonócsillag, reteszelő bevágások,
+  recézett kakassarkantyú, bordázott ravasz, csavarok
+- **fa markolatpanel** gyémántmetszésű kockázással — a fa erezete és a
+  kockázás is kódból rajzolt textúra
+
+### Anyagok és fény
+A fém hitelességéhez **valódi környezettérkép** kell: a `RoomEnvironment`
+és a `PMREMGenerator` adja a visszaverődéseket, e nélkül a kékített acél
+lapos és halott. ACES filmes tónusleképezés, karcolt érdességtérkép.
+
+### Hang
+Minden hang szintetizált, és mindegyik átmegy egy **generált
+teremvisszhangon** (exponenciálisan lecsengő zajból készült impulzusválasz),
+hogy a lőtér tere is hallatsszon. A lövés négy rétegből áll: tranziens,
+test, durranás és elhaló farok. A kakas felhúzása a klasszikus **kettős
+kattanás**.
+
 ### Ellenőrzés
+30 viselkedés mérve: a dupla akciós ravaszút minden szakasza, a 60 fokos
+dobfordulás, a hat lövés és a száraz elsütés, az egyszeres akció rövidebb
+ravaszútja, a dob kifordítása és a blokkolt szerkezet, az ürítés és töltés,
+a céltalálat, és 60 mp folyamatos működés.
+
+Javítva a tesztelés során két valódi hiba: a `THREE.Ray`-nek nincs
+`intersectObject` metódusa (az a `Raycaster`-é), és a `shoot()` a torkolat
+helyét a közös `_a` ideiglenes vektorban tartotta, amit a részecske- és
+füstkibocsátás belül felülírt — ezért a lövés **soha nem talált**.
+
+## Ellenőrzés
 30 viselkedés mérve headless Chromiumban: városgenerálás és kerületek,
 épületütközés járásnál és lövedéknél, forgalom mozgása és sávtartása
 (130/130 az úton maradt), járókelők sétája és menekülése, mind a négy
