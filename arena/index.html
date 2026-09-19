@@ -1,0 +1,1149 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Szakadék — Quest 3</title>
+<style>
+  :root {
+    --bg: #0b0d12; --ink: #eef2f7; --muted: #94a1b4; --line: #1e2430;
+    --cyan: #57e2c4; --red: #ff5b6e; --gold: #ffd166;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  canvas { display: block; }
+  #ui {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    justify-content: flex-end; padding: clamp(20px, 5vw, 56px); gap: 14px;
+    pointer-events: none;
+    background: linear-gradient(to top, rgba(11,13,18,.97) 36%, rgba(11,13,18,.5) 74%, transparent);
+  }
+  #ui > * { pointer-events: auto; max-width: 54ch; }
+  h1 {
+    margin: 0; font-size: clamp(30px, 8vw, 56px); font-weight: 700;
+    letter-spacing: -0.04em; line-height: 1;
+    background: linear-gradient(100deg, var(--cyan), var(--gold));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  p { margin: 0; color: var(--muted); line-height: 1.55; font-size: 15px; }
+  .rules { display: grid; gap: 7px; font-size: 14px; color: var(--muted); }
+  .rules b { color: var(--ink); font-weight: 600; }
+  .k { display: inline-block; padding: 1px 7px; border-radius: 5px;
+       background: #171d27; border: 1px solid var(--line); color: var(--ink);
+       font-size: 12.5px; font-weight: 600; }
+  #best { font-size: 14px; color: var(--gold); min-height: 1.3em; }
+  #caps { display: flex; flex-wrap: wrap; gap: 6px; font-size: 12.5px; line-height: 1; }
+  .cap { padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line);
+         background: #141922; color: var(--muted); white-space: nowrap; }
+  .cap.on  { border-color: rgba(87,226,196,.5); color: var(--cyan); background: rgba(87,226,196,.08); }
+  .cap.off { border-color: rgba(255,91,110,.35); color: var(--red); background: rgba(255,91,110,.07); }
+  #status { font-size: 14px; color: var(--cyan); min-height: 1.4em; }
+  button {
+    font: inherit; font-weight: 700; font-size: 18px; color: #05221c;
+    background: var(--cyan); border: 0; border-radius: 999px;
+    padding: 16px 34px; cursor: pointer; align-self: flex-start;
+    transition: transform .12s ease, background .12s ease;
+  }
+  button:hover { background: #6df0d4; }
+  button:active { transform: scale(.97); }
+  button:disabled { background: var(--line); color: var(--muted); cursor: default; }
+  button:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>Szakadék</h1>
+  <p>A falaidon szakadékok nyílnak. Ami kijön rajtuk, az hozzád tart.</p>
+  <div class="rules">
+    <div><span class="k">Kék gömb</span> <b>fogd el</b> — csippentéssel vagy ravasszal. Ez a lőszered.</div>
+    <div><span class="k">Piros</span> <b>dobd hozzá a gömböt</b>, vagy <b>üsd meg</b> gyorsan mozgó kézzel.</div>
+    <div><span class="k">Pajzs</span> aki átjut, elvisz egyet. Három van.</div>
+    <div><span class="k">Kombó</span> szakadék nélkül találni: szorzó nő, a zene felpörög.</div>
+  </div>
+  <div id="best"></div>
+  <div id="caps"></div>
+  <div id="status">Ellenőrzés…</div>
+  <button id="enter" disabled>Belépés</button>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+const statusEl = document.getElementById('status');
+const enterEl  = document.getElementById('enter');
+const uiEl     = document.getElementById('ui');
+const capsEl   = document.getElementById('caps');
+const bestEl   = document.getElementById('best');
+
+const WANTED = ['local-floor','bounded-floor','hand-tracking','plane-detection','anchors'];
+
+// --- játékbeállítások ---
+const CFG = {
+  shieldMax: 3,
+  orbTarget: 5,            // ennyi elkapható gömb legyen egyszerre
+  orbSpeed: 0.45,
+  huntSpeedBase: 0.42,
+  huntSpeedPerWave: 0.055,
+  huntPerWave: 3,
+  punchSpeed: 1.6,         // m/s, ennél gyorsabb kéz üt
+  punchReach: 0.22,
+  grabReach: 0.17,
+  throwKill: 1.8,          // m/s, ennél gyorsabb gömb öl
+  hitRadius: 0.2,
+  reachPlayer: 0.42,       // ilyen közel már talál téged
+  waveBreak: 3.0,
+  tankEvery: 4,            // minden N. hullámban jön nehéz ellenfél
+  maxParticles: 500
+};
+
+const G = {
+  renderer:null, scene:null, camera:null, clock:null, head:new THREE.Vector3(0,1.6,0),
+  controllers:[], hands:[],
+  planes:new Map(), rifts:[], usingRealRoom:false, fallbackRoom:null,
+  orbs:[], hunters:[],
+  phase:'menu',            // menu | play | between | over
+  score:0, wave:0, combo:0, best:0, shield:CFG.shieldMax,
+  waveLeft:0, spawnQueue:0, spawnTimer:0, breakTimer:0,
+  slowmo:0, shake:0,
+  audio:null, music:null, sfxThisFrame:0,
+  hud:null, bigText:null, particles:null,
+  fwd:new THREE.Vector3(0,0,-1), restartLock:0,
+  granted:[], session:null
+};
+
+const V1=new THREE.Vector3(), V2=new THREE.Vector3(), V3=new THREE.Vector3();
+const Q1=new THREE.Quaternion(), M1=new THREE.Matrix4();
+const RAY = new THREE.Raycaster();
+
+// ---------- alap ----------
+function init() {
+  G.scene = new THREE.Scene();
+  G.camera = new THREE.PerspectiveCamera(70, innerWidth/innerHeight, 0.01, 60);
+  G.camera.position.set(0, 1.6, 1.6);
+
+  G.renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true });
+  G.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  G.renderer.setSize(innerWidth, innerHeight);
+  G.renderer.xr.enabled = true;
+  G.renderer.xr.setReferenceSpaceType('local-floor');
+  document.body.appendChild(G.renderer.domElement);
+
+  G.scene.add(new THREE.HemisphereLight(0xffffff, 0x2a3442, 0.85));
+  const d = new THREE.DirectionalLight(0xffffff, 0.7);
+  d.position.set(1.5, 3, 1);
+  G.scene.add(d);
+
+  G.clock = new THREE.Clock();
+
+  buildFallbackRoom();
+  buildParticles();
+  buildHud();
+  setupInputs();
+  buildRifts(null);
+
+  try { G.best = parseInt(localStorage.getItem('szakadek.best') || '0', 10) || 0; } catch (e) { G.best = 0; }
+  if (G.best) bestEl.textContent = 'Legjobb eredményed: ' + G.best;
+
+  addEventListener('resize', onResize);
+  G.renderer.setAnimationLoop(tick);
+}
+
+function onResize() {
+  G.camera.aspect = innerWidth/innerHeight;
+  G.camera.updateProjectionMatrix();
+  G.renderer.setSize(innerWidth, innerHeight);
+}
+
+function buildFallbackRoom() {
+  G.fallbackRoom = new THREE.Group();
+  const grid = new THREE.GridHelper(14, 28, 0x57e2c4, 0x232b38);
+  grid.material.opacity = 0.35; grid.material.transparent = true;
+  G.fallbackRoom.add(grid);
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(26, 24, 16),
+    new THREE.MeshBasicMaterial({ color:0x0b0d12, side:THREE.BackSide })
+  );
+  G.fallbackRoom.add(dome);
+  G.scene.add(G.fallbackRoom);
+}
+
+function dispose(m) {
+  if (!m) return;
+  if (m.geometry) m.geometry.dispose();
+  if (m.material) (Array.isArray(m.material)?m.material:[m.material]).forEach(x=>x.dispose());
+}
+
+// ---------- részecskék (egy draw call az egészre) ----------
+function buildParticles() {
+  const n = CFG.maxParticles;
+  const pos = new Float32Array(n*3), col = new Float32Array(n*3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const mat = new THREE.PointsMaterial({
+    size:0.035, vertexColors:true, transparent:true, opacity:0.95,
+    blending:THREE.AdditiveBlending, depthWrite:false, sizeAttenuation:true
+  });
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false;
+  G.scene.add(pts);
+  G.particles = {
+    pts, geo, pos, col, n, head:0,
+    vel:new Float32Array(n*3), life:new Float32Array(n), max:new Float32Array(n)
+  };
+  for (let i=0;i<n;i++) pos[i*3+1] = -999;
+}
+
+function burst(p, color, count, speed) {
+  const P = G.particles;
+  const c = new THREE.Color(color);
+  for (let k=0;k<count;k++) {
+    const i = P.head; P.head = (P.head+1) % P.n;
+    P.pos[i*3]=p.x; P.pos[i*3+1]=p.y; P.pos[i*3+2]=p.z;
+    const s = speed*(0.35+Math.random()*0.9);
+    V1.set(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5).normalize().multiplyScalar(s);
+    P.vel[i*3]=V1.x; P.vel[i*3+1]=V1.y; P.vel[i*3+2]=V1.z;
+    P.col[i*3]=c.r; P.col[i*3+1]=c.g; P.col[i*3+2]=c.b;
+    P.max[i] = 0.4 + Math.random()*0.5;
+    P.life[i] = P.max[i];
+  }
+}
+
+function stepParticles(dt) {
+  const P = G.particles;
+  for (let i=0;i<P.n;i++) {
+    if (P.life[i] <= 0) continue;
+    P.life[i] -= dt;
+    if (P.life[i] <= 0) { P.pos[i*3+1] = -999; continue; }
+    P.vel[i*3+1] -= 2.2*dt;
+    P.pos[i*3]   += P.vel[i*3]*dt;
+    P.pos[i*3+1] += P.vel[i*3+1]*dt;
+    P.pos[i*3+2] += P.vel[i*3+2]*dt;
+    const f = P.life[i]/P.max[i];
+    P.col[i*3]*=0.995; P.col[i*3+1]*=0.995; P.col[i*3+2]*=0.995;
+    if (f < 0.25) { P.col[i*3]*=0.9; P.col[i*3+1]*=0.9; P.col[i*3+2]*=0.9; }
+  }
+  P.geo.attributes.position.needsUpdate = true;
+  P.geo.attributes.color.needsUpdate = true;
+}
+
+// ---------- szakadékok ----------
+// Valódi falakon nyílnak, ha a rendszer felismerte őket; különben virtuális gyűrűben.
+function makeRift(pos, normal) {
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.34, 0.028, 10, 36),
+    new THREE.MeshBasicMaterial({ color:0x57e2c4, transparent:true, opacity:0.85 })
+  );
+  g.add(ring);
+  const core = new THREE.Mesh(
+    new THREE.CircleGeometry(0.33, 28),
+    new THREE.MeshBasicMaterial({ color:0x0a2c26, transparent:true, opacity:0.55, side:THREE.DoubleSide })
+  );
+  g.add(core);
+  g.position.copy(pos);
+  const look = V1.copy(pos).add(normal);
+  g.lookAt(look);
+  G.scene.add(g);
+  return { group:g, ring, core, pos:pos.clone(), normal:normal.clone(), heat:0 };
+}
+
+function clearRifts() {
+  for (const r of G.rifts) { G.scene.remove(r.group); r.group.traverse(o=>dispose(o)); }
+  G.rifts.length = 0;
+}
+
+function buildRifts(planeRecs) {
+  clearRifts();
+  const verticals = planeRecs ? planeRecs.filter(p => p.vertical) : [];
+
+  if (verticals.length >= 2) {
+    // valódi falakra
+    for (const rec of verticals.slice(0, 6)) {
+      const cx = (rec.min.x + rec.max.x) / 2;
+      const p = V2.set(cx, 0, 0).applyQuaternion(rec.quat).add(rec.origin);
+      p.y = Math.max(1.1, Math.min(1.9, p.y || 1.4));
+      const n = V3.copy(rec.normal);
+      // a normálist befelé, a játékos felé fordítjuk
+      if (n.dot(V1.copy(G.head).sub(p)) < 0) n.negate();
+      G.rifts.push(makeRift(p, n));
+    }
+    G.usingRealRoom = true;
+  } else {
+    const count = 5;
+    for (let i=0;i<count;i++) {
+      const a = (i/count) * Math.PI*2 + 0.4;
+      const r = 2.6;
+      const p = new THREE.Vector3(Math.sin(a)*r, 1.25 + Math.sin(i*1.7)*0.35, Math.cos(a)*r);
+      const n = new THREE.Vector3(-Math.sin(a), 0, -Math.cos(a));
+      G.rifts.push(makeRift(p, n));
+    }
+    G.usingRealRoom = false;
+  }
+  G.fallbackRoom.visible = !G.usingRealRoom;
+}
+
+function randomRift() {
+  if (!G.rifts.length) return null;
+  return G.rifts[Math.floor(Math.random()*G.rifts.length)];
+}
+
+// ---------- entitások ----------
+const orbGeo  = new THREE.SphereGeometry(0.075, 18, 14);
+const huntGeo = new THREE.IcosahedronGeometry(0.1, 0);
+const tankGeo = new THREE.IcosahedronGeometry(0.17, 1);
+
+function spawnOrb() {
+  const rift = randomRift();
+  if (!rift) return;
+  const mat = new THREE.MeshStandardMaterial({
+    color:0x57e2c4, emissive:0x2ba98f, emissiveIntensity:0.8, roughness:0.3, metalness:0.2
+  });
+  const mesh = new THREE.Mesh(orbGeo, mat);
+  mesh.position.copy(rift.pos).addScaledVector(rift.normal, 0.16);
+  G.scene.add(mesh);
+  const vel = rift.normal.clone().multiplyScalar(CFG.orbSpeed);
+  vel.y += 0.15;
+  G.orbs.push({ mesh, mat, r:0.075, vel, held:null, age:0, live:true });
+  rift.heat = 1;
+  burst(mesh.position, 0x57e2c4, 8, 1.1);
+}
+
+function spawnHunter(tank) {
+  const rift = randomRift();
+  if (!rift) return;
+  const mat = new THREE.MeshStandardMaterial({
+    color: tank ? 0xff8a5b : 0xff5b6e,
+    emissive: tank ? 0xff8a5b : 0xff5b6e,
+    emissiveIntensity:0.75, roughness:0.35, metalness:0.15
+  });
+  const mesh = new THREE.Mesh(tank ? tankGeo : huntGeo, mat);
+  mesh.position.copy(rift.pos).addScaledVector(rift.normal, 0.18);
+  G.scene.add(mesh);
+  G.hunters.push({
+    mesh, mat, tank: !!tank, hp: tank ? 3 : 1,
+    r: tank ? 0.17 : 0.1,
+    speed: CFG.huntSpeedBase + G.wave*CFG.huntSpeedPerWave + (tank ? -0.12 : 0),
+    spin: new THREE.Vector3(Math.random()*2, Math.random()*2, Math.random()*2),
+    flash: 0, live: true
+  });
+  rift.heat = 1;
+  burst(mesh.position, tank ? 0xff8a5b : 0xff5b6e, 10, 1.3);
+}
+
+function removeOrb(o) {
+  o.live = false;
+  if (o.held) { o.held.userData.held = null; o.held = null; }
+  G.scene.remove(o.mesh);
+  o.mat.dispose();
+}
+
+function removeHunter(h) {
+  h.live = false;
+  G.scene.remove(h.mesh);
+  h.mat.dispose();
+}
+
+function addScore(n) {
+  const mult = 1 + Math.floor(G.combo/5);
+  G.score += n * mult;
+  if (G.score > G.best) {
+    G.best = G.score;
+    try { localStorage.setItem('szakadek.best', String(G.best)); } catch (e) {}
+  }
+}
+
+function killHunter(h, byThrow) {
+  burst(h.mesh.position, h.tank ? 0xff8a5b : 0xff5b6e, h.tank ? 40 : 22, h.tank ? 2.6 : 1.9);
+  sfx('kill', h.mesh.position, h.tank ? 0.55 : 0.4);
+  G.combo++;
+  addScore(byThrow ? (h.tank ? 500 : 150) : (h.tank ? 250 : 60));
+  G.shake = Math.min(1, G.shake + (h.tank ? 0.5 : 0.22));
+  if (G.music) G.music.intensity = Math.min(1, 0.35 + G.combo*0.05);
+  removeHunter(h);
+  G.waveLeft--;
+}
+
+function damagePlayer(pos) {
+  G.shield--;
+  G.combo = 0;
+  G.shake = 1;
+  burst(pos, 0xff5b6e, 34, 2.4);
+  sfx('hurt', pos, 0.8);
+  if (G.music) G.music.intensity = 0.3;
+  pulseAll(0.9, 90);
+  if (G.shield <= 0) gameOver();
+}
+
+// ---------- entitások frissítése ----------
+function updateOrbs(dt) {
+  for (let i = G.orbs.length-1; i >= 0; i--) {
+    const o = G.orbs[i];
+    if (!o.live) { G.orbs.splice(i,1); continue; }
+    o.age += dt;
+    if (o.held) {
+      o.held.userData.grip.getWorldPosition(o.mesh.position);
+      o.mesh.rotation.y += dt*3;
+      continue;
+    }
+    // lassan a játékos felé sodródik, hogy elérhető legyen
+    V1.copy(G.head).sub(o.mesh.position);
+    const d = V1.length();
+    if (d > 0.8 && o.age < 14) o.vel.addScaledVector(V1.divideScalar(d), 0.5*dt);
+    o.vel.y -= 0.9*dt;
+    o.vel.multiplyScalar(0.995);
+    o.mesh.position.addScaledVector(o.vel, dt);
+    o.mesh.rotation.y += dt*1.4;
+    if (o.mesh.position.y < 0.06) { o.mesh.position.y = 0.06; o.vel.y = Math.abs(o.vel.y)*0.45; }
+    const glow = 0.6 + Math.sin(o.age*4)*0.25;
+    o.mat.emissiveIntensity = glow;
+
+    // eldobott gömb öl
+    if (o.vel.lengthSq() > CFG.throwKill*CFG.throwKill) {
+      for (const h of G.hunters) {
+        if (!h.live) continue;
+        if (o.mesh.position.distanceTo(h.mesh.position) < h.r + o.r + 0.06) {
+          h.hp--;
+          h.flash = 1;
+          burst(o.mesh.position, 0xffd166, 14, 1.6);
+          if (h.hp <= 0) killHunter(h, true);
+          else sfx('ping', h.mesh.position, 0.35);
+          removeOrb(o);
+          break;
+        }
+      }
+    }
+    if (o.live && (o.age > 26 || o.mesh.position.distanceTo(G.head) > 9)) removeOrb(o);
+  }
+}
+
+function updateHunters(dt) {
+  for (let i = G.hunters.length-1; i >= 0; i--) {
+    const h = G.hunters[i];
+    if (!h.live) { G.hunters.splice(i,1); continue; }
+
+    V1.copy(G.head).sub(h.mesh.position);
+    const d = V1.length();
+    if (d > 0.001) h.mesh.position.addScaledVector(V1.divideScalar(d), h.speed*dt);
+    h.mesh.rotation.x += h.spin.x*dt;
+    h.mesh.rotation.y += h.spin.y*dt;
+    h.mesh.rotation.z += h.spin.z*dt;
+
+    if (h.flash > 0) {
+      h.flash = Math.max(0, h.flash - dt*3);
+      h.mat.emissiveIntensity = 0.75 + h.flash*2.2;
+    }
+
+    if (d < CFG.reachPlayer) {
+      const p = h.mesh.position.clone();
+      removeHunter(h);
+      G.waveLeft--;
+      damagePlayer(p);
+      continue;
+    }
+
+    // ütés: elég gyors kéz elég közel
+    for (const src of allInputs()) {
+      const ud = src.userData;
+      if (!ud || !ud.grip) continue;
+      ud.grip.getWorldPosition(V2);
+      if (V2.distanceTo(h.mesh.position) < h.r + CFG.punchReach &&
+          ud.vel.lengthSq() > CFG.punchSpeed*CFG.punchSpeed) {
+        h.hp--;
+        h.flash = 1;
+        burst(V2, 0xffd166, 12, 1.4);
+        pulse(src, 0.7, 45);
+        if (h.hp <= 0) killHunter(h, false);
+        else sfx('ping', h.mesh.position, 0.35);
+        break;
+      }
+    }
+  }
+}
+
+function updateRifts(dt) {
+  for (const r of G.rifts) {
+    r.heat = Math.max(0, r.heat - dt*1.6);
+    r.ring.material.opacity = 0.5 + r.heat*0.5;
+    r.ring.rotation.z += dt*(0.5 + r.heat*5);
+    const s = 1 + r.heat*0.18;
+    r.group.scale.setScalar(s);
+  }
+}
+
+// ---------- bemenet ----------
+const dotGeo = new THREE.SphereGeometry(0.01, 10, 8);
+const handMat  = new THREE.MeshStandardMaterial({ color:0x8fb8ff, emissive:0x3b6bd6, emissiveIntensity:0.55, roughness:0.4 });
+const pinchMat = new THREE.MeshStandardMaterial({ color:0x57e2c4, emissive:0x57e2c4, emissiveIntensity:1.0, roughness:0.4 });
+
+function allInputs() { return G.controllers.concat(G.hands); }
+
+function newInputData(kind, grip) {
+  return { kind, grip, held:null, pinching:false, hasPrev:false,
+           prev:new THREE.Vector3(), vel:new THREE.Vector3(), inputSource:null };
+}
+
+function setupInputs() {
+  for (let i=0;i<2;i++) {
+    const c = G.renderer.xr.getController(i);
+    c.userData = newInputData('controller', c);
+    const tip = new THREE.Mesh(dotGeo, pinchMat);
+    tip.scale.setScalar(1.6);
+    c.add(tip);
+    c.addEventListener('connected', e => {
+      c.userData.inputSource = e.data;
+      tip.visible = !(e.data && e.data.hand);
+    });
+    c.addEventListener('disconnected', () => { c.userData.inputSource = null; });
+    c.addEventListener('selectstart', () => { c.userData.pinching = true;  tryGrab(c); });
+    c.addEventListener('selectend',   () => { c.userData.pinching = false; release(c); });
+    c.addEventListener('squeezestart',() => { c.userData.pinching = true;  tryGrab(c); });
+    c.addEventListener('squeezeend',  () => { c.userData.pinching = false; release(c); });
+    G.scene.add(c);
+    G.controllers.push(c);
+
+    const h = G.renderer.xr.getHand(i);
+    const grip = new THREE.Object3D();
+    G.scene.add(grip);
+    h.userData = newInputData('hand', grip);
+    h.addEventListener('pinchstart', () => { h.userData.pinching = true; paintHand(h, pinchMat); tryGrab(h); });
+    h.addEventListener('pinchend',   () => { h.userData.pinching = false; paintHand(h, handMat); release(h); });
+    G.scene.add(h);
+    G.hands.push(h);
+  }
+}
+
+function decorateHand(h) {
+  for (const name in h.joints) {
+    const j = h.joints[name];
+    if (!j.userData.dot) {
+      const dot = new THREE.Mesh(dotGeo, h.userData.pinching ? pinchMat : handMat);
+      const r = j.jointRadius || 0.008;
+      dot.scale.setScalar(Math.max(r, 0.004)/0.01);
+      j.add(dot);
+      j.userData.dot = dot;
+    }
+  }
+}
+
+function paintHand(h, mat) {
+  for (const name in h.joints) {
+    const dot = h.joints[name].userData.dot;
+    if (dot) dot.material = mat;
+  }
+}
+
+function handPinchPoint(h, out) {
+  const a = h.joints && h.joints['index-finger-tip'];
+  const b = h.joints && h.joints['thumb-tip'];
+  if (a && b && a.visible && b.visible) {
+    out.copy(a.getWorldPosition(V2)).add(b.getWorldPosition(V3)).multiplyScalar(0.5);
+    return true;
+  }
+  return false;
+}
+
+function tryGrab(src) {
+  if (G.phase !== 'play') return;
+  const ud = src.userData;
+  if (ud.held) return;
+  ud.grip.getWorldPosition(V1);
+  let best = null, bestD = CFG.grabReach;
+  for (const o of G.orbs) {
+    if (!o.live || o.held) continue;
+    const d = o.mesh.position.distanceTo(V1) - o.r;
+    if (d < bestD) { bestD = d; best = o; }
+  }
+  if (best) {
+    best.held = src;
+    ud.held = best;
+    best.vel.set(0,0,0);
+    pulse(src, 0.45, 25);
+    sfx('grab', V1, 0.3);
+    burst(V1, 0x57e2c4, 6, 0.8);
+  }
+}
+
+function release(src) {
+  const ud = src.userData;
+  const o = ud.held;
+  if (!o) return;
+  o.vel.copy(ud.vel).multiplyScalar(1.3);
+  if (o.vel.length() > 12) o.vel.setLength(12);
+  o.held = null;
+  ud.held = null;
+  o.age = Math.min(o.age, 18);
+  if (o.vel.length() > CFG.throwKill) { pulse(src, 0.35, 20); sfx('throw', o.mesh.position, 0.3); }
+}
+
+function trackInputs(dt) {
+  for (const h of G.hands) {
+    decorateHand(h);
+    if (handPinchPoint(h, V1)) h.userData.grip.position.copy(V1);
+  }
+  for (const src of allInputs()) {
+    const ud = src.userData;
+    ud.grip.getWorldPosition(V1);
+    if (ud.hasPrev && dt > 0) {
+      V2.copy(V1).sub(ud.prev).divideScalar(dt);
+      ud.vel.lerp(V2, 0.5);
+    }
+    ud.prev.copy(V1);
+    ud.hasPrev = true;
+  }
+}
+
+function pulse(src, intensity, ms) {
+  const is = src.userData && src.userData.inputSource;
+  const act = is && is.gamepad && is.gamepad.hapticActuators && is.gamepad.hapticActuators[0];
+  if (act && act.pulse) { try { act.pulse(intensity, ms); } catch (e) {} }
+}
+function pulseAll(i, ms) { for (const c of G.controllers) pulse(c, i, ms); }
+
+// ---------- hang: szintetizált zene és effektek ----------
+function initAudio() {
+  if (G.audio) return;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  try {
+    const ctx = new Ctx();
+    const master = ctx.createGain(); master.gain.value = 0.5; master.connect(ctx.destination);
+    const musicBus = ctx.createGain(); musicBus.gain.value = 0.32; musicBus.connect(master);
+    G.audio = { ctx, master, musicBus };
+    G.music = { next:0, step:0, bpm:104, intensity:0.3 };
+  } catch (e) { G.audio = null; }
+}
+
+function noiseBuffer(ctx) {
+  const n = ctx.sampleRate * 0.25;
+  const buf = ctx.createBuffer(1, n, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0;i<n;i++) d[i] = Math.random()*2-1;
+  return buf;
+}
+
+function sfx(kind, pos, vol) {
+  if (!G.audio || G.sfxThisFrame >= 4) return;
+  G.sfxThisFrame++;
+  const { ctx, master } = G.audio;
+  const t = ctx.currentTime;
+
+  const pan = ctx.createPanner();
+  pan.panningModel = 'HRTF'; pan.distanceModel = 'inverse';
+  pan.refDistance = 0.6; pan.maxDistance = 25;
+  if (pan.positionX) { pan.positionX.value=pos.x; pan.positionY.value=pos.y; pan.positionZ.value=pos.z; }
+  else if (pan.setPosition) pan.setPosition(pos.x, pos.y, pos.z);
+  pan.connect(master);
+
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.connect(pan);
+
+  if (kind === 'kill' || kind === 'hurt') {
+    const src = ctx.createBufferSource();
+    src.buffer = G.audio.noise || (G.audio.noise = noiseBuffer(ctx));
+    const f = ctx.createBiquadFilter();
+    f.type = kind === 'hurt' ? 'lowpass' : 'bandpass';
+    f.frequency.setValueAtTime(kind === 'hurt' ? 900 : 1500, t);
+    f.frequency.exponentialRampToValueAtTime(kind === 'hurt' ? 120 : 260, t+0.3);
+    g.gain.exponentialRampToValueAtTime(vol, t+0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.34);
+    src.connect(f); f.connect(g);
+    src.start(t); src.stop(t+0.36);
+  } else {
+    const o = ctx.createOscillator();
+    const base = kind==='grab' ? 520 : kind==='throw' ? 300 : 760;
+    o.type = kind==='ping' ? 'square' : 'triangle';
+    o.frequency.setValueAtTime(base, t);
+    o.frequency.exponentialRampToValueAtTime(kind==='grab' ? base*1.7 : base*0.55, t+0.13);
+    g.gain.exponentialRampToValueAtTime(vol, t+0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.18);
+    o.connect(g);
+    o.start(t); o.stop(t+0.2);
+  }
+}
+
+// Generatív aláfestés: a kombóval sűrűsödik.
+const SCALE = [0, 3, 5, 7, 10];
+function stepMusic() {
+  if (!G.audio || !G.music || G.phase === 'menu') return;
+  const { ctx, musicBus } = G.audio;
+  const M = G.music;
+  const spb = 60 / M.bpm / 2;              // nyolcadok
+  if (M.next === 0) M.next = ctx.currentTime + 0.1;
+  while (M.next < ctx.currentTime + 0.25) {
+    const t = M.next, s = M.step;
+    const inten = M.intensity;
+
+    if (s % 4 === 0) {                      // lábdob
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.setValueAtTime(140, t);
+      o.frequency.exponentialRampToValueAtTime(45, t+0.11);
+      g.gain.setValueAtTime(0.9, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+0.16);
+      o.connect(g); g.connect(musicBus); o.start(t); o.stop(t+0.18);
+    }
+    if (inten > 0.4 && s % 4 === 2) {       // pergő-szerű zaj
+      const src = ctx.createBufferSource(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+      src.buffer = G.audio.noise || (G.audio.noise = noiseBuffer(ctx));
+      f.type='highpass'; f.frequency.value = 2600;
+      g.gain.setValueAtTime(0.28*inten, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+0.07);
+      src.connect(f); f.connect(g); g.connect(musicBus);
+      src.start(t); src.stop(t+0.08);
+    }
+    if (s % 2 === 0) {                      // basszus
+      const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+      const n = SCALE[(s/2) % SCALE.length];
+      o.type='sawtooth';
+      o.frequency.value = 55 * Math.pow(2, n/12);
+      f.type='lowpass'; f.frequency.value = 380 + inten*900;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.32, t+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+spb*1.6);
+      o.connect(f); f.connect(g); g.connect(musicBus);
+      o.start(t); o.stop(t+spb*1.8);
+    }
+    if (inten > 0.55) {                     // arpeggio
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      const n = SCALE[(s*3) % SCALE.length];
+      o.type='triangle';
+      o.frequency.value = 440 * Math.pow(2, n/12) * (s%8<4 ? 1 : 1.5);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.12*inten, t+0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t+spb*0.9);
+      o.connect(g); g.connect(musicBus);
+      o.start(t); o.stop(t+spb);
+    }
+    M.step = (s+1) % 32;
+    M.next += spb;
+  }
+}
+
+function updateListener(cam) {
+  if (!G.audio) return;
+  const l = G.audio.ctx.listener;
+  cam.getWorldPosition(V1);
+  cam.getWorldQuaternion(Q1);
+  V2.set(0,0,-1).applyQuaternion(Q1);
+  V3.set(0,1,0).applyQuaternion(Q1);
+  if (l.positionX) {
+    l.positionX.value=V1.x; l.positionY.value=V1.y; l.positionZ.value=V1.z;
+    l.forwardX.value=V2.x; l.forwardY.value=V2.y; l.forwardZ.value=V2.z;
+    l.upX.value=V3.x; l.upY.value=V3.y; l.upZ.value=V3.z;
+  } else if (l.setPosition) {
+    l.setPosition(V1.x,V1.y,V1.z);
+    l.setOrientation(V2.x,V2.y,V2.z, V3.x,V3.y,V3.z);
+  }
+}
+
+// ---------- szobasíkok ----------
+function updatePlanes(frame, refSpace) {
+  let detected = null;
+  try { detected = frame.detectedPlanes; } catch (e) { return; }
+  if (!detected) return;
+
+  for (const [plane, rec] of G.planes) {
+    let alive = true;
+    try { alive = detected.has(plane); } catch (e) { alive = true; }
+    if (!alive) G.planes.delete(plane);
+  }
+
+  let changed = false;
+  for (const plane of detected) {
+    let pose = null;
+    try { pose = frame.getPose(plane.planeSpace, refSpace); } catch (e) { continue; }
+    if (!pose) continue;
+    let rec = G.planes.get(plane);
+    if (!rec || rec.stamp !== plane.lastChangedTime) {
+      const poly = plane.polygon;
+      if (!poly || poly.length < 3) continue;
+      let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+      for (const q of poly) {
+        if (q.x<minX) minX=q.x; if (q.x>maxX) maxX=q.x;
+        if (q.z<minZ) minZ=q.z; if (q.z>maxZ) maxZ=q.z;
+      }
+      rec = {
+        stamp: plane.lastChangedTime,
+        origin:new THREE.Vector3(), quat:new THREE.Quaternion(), normal:new THREE.Vector3(),
+        min:{x:minX,z:minZ}, max:{x:maxX,z:maxZ},
+        vertical: plane.orientation === 'vertical'
+      };
+      G.planes.set(plane, rec);
+      changed = true;
+    }
+    const p = pose.transform.position, o = pose.transform.orientation;
+    rec.origin.set(p.x,p.y,p.z);
+    rec.quat.set(o.x,o.y,o.z,o.w);
+    rec.normal.set(0,1,0).applyQuaternion(rec.quat);
+  }
+
+  if (changed) {
+    const recs = Array.from(G.planes.values());
+    if (recs.filter(r => r.vertical).length >= 2) buildRifts(recs);
+  }
+}
+
+// ---------- kijelzők ----------
+function makePanel(w, h, px, py) {
+  const c = document.createElement('canvas');
+  c.width = px; c.height = py;
+  const ctx = c.getContext('2d');
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(w, h),
+    new THREE.MeshBasicMaterial({ map:tex, transparent:true, depthTest:false })
+  );
+  mesh.renderOrder = 10;
+  G.scene.add(mesh);
+  return { c, ctx, tex, mesh };
+}
+
+function buildHud() {
+  G.hud = makePanel(0.62, 0.155, 1024, 256);
+  G.hud.pos = new THREE.Vector3(0, 1.1, -1.3);
+  G.bigText = makePanel(0.9, 0.3, 1024, 340);
+  G.bigText.pos = new THREE.Vector3(0, 1.6, -1.8);
+  G.bigText.mesh.visible = false;
+  G.bigText.timer = 0;
+}
+
+function drawHud() {
+  const g = G.hud.ctx;
+  g.clearRect(0,0,1024,256);
+  g.fillStyle = 'rgba(9,12,17,0.82)';
+  roundRect(g, 0, 0, 1024, 256, 28); g.fill();
+
+  g.textBaseline = 'middle';
+  g.textAlign = 'left';
+  g.fillStyle = '#eef2f7';
+  g.font = '700 74px Inter, "Segoe UI", system-ui, sans-serif';
+  g.fillText(String(G.score), 38, 82);
+
+  g.font = '600 30px Inter, "Segoe UI", system-ui, sans-serif';
+  g.fillStyle = '#94a1b4';
+  g.fillText(G.wave > 0 ? ('HULLÁM ' + G.wave) : 'KÉSZÜLJ', 38, 172);
+
+  const mult = 1 + Math.floor(G.combo/5);
+  if (mult > 1) {
+    g.textAlign = 'center';
+    g.fillStyle = '#ffd166';
+    g.font = '800 60px Inter, "Segoe UI", system-ui, sans-serif';
+    g.fillText('×' + mult, 512, 96);
+    g.font = '600 26px Inter, "Segoe UI", system-ui, sans-serif';
+    g.fillText(G.combo + ' sorozat', 512, 168);
+  }
+
+  g.textAlign = 'right';
+  for (let i=0;i<CFG.shieldMax;i++) {
+    const on = i < G.shield;
+    g.fillStyle = on ? '#57e2c4' : '#252c38';
+    g.beginPath();
+    g.arc(980 - i*62, 82, 21, 0, Math.PI*2);
+    g.fill();
+  }
+  g.fillStyle = '#94a1b4';
+  g.font = '600 26px Inter, "Segoe UI", system-ui, sans-serif';
+  g.fillText('PAJZS', 980, 168);
+
+  G.hud.tex.needsUpdate = true;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x+r, y);
+  g.arcTo(x+w, y,   x+w, y+h, r);
+  g.arcTo(x+w, y+h, x,   y+h, r);
+  g.arcTo(x,   y+h, x,   y,   r);
+  g.arcTo(x,   y,   x+w, y,   r);
+  g.closePath();
+}
+
+function say(title, sub, seconds, color) {
+  const B = G.bigText, g = B.ctx;
+  g.clearRect(0,0,1024,340);
+  g.textAlign='center'; g.textBaseline='middle';
+  g.fillStyle = color || '#57e2c4';
+  g.font = '800 130px Inter, "Segoe UI", system-ui, sans-serif';
+  g.fillText(title, 512, 130);
+  if (sub) {
+    g.fillStyle = '#c3ccda';
+    g.font = '600 46px Inter, "Segoe UI", system-ui, sans-serif';
+    g.fillText(sub, 512, 258);
+  }
+  B.tex.needsUpdate = true;
+  B.mesh.visible = true;
+  B.timer = seconds;
+}
+
+function followHead(panel, dt, dist, drop) {
+  const target = V1.copy(G.fwd).multiplyScalar(dist).add(G.head);
+  target.y -= drop;
+  panel.mesh.position.lerp(target, Math.min(1, dt*3.2));
+  panel.mesh.lookAt(G.head);
+}
+
+// ---------- játékmenet ----------
+function resetEntities() {
+  for (const o of G.orbs.slice()) removeOrb(o);
+  for (const h of G.hunters.slice()) removeHunter(h);
+  G.orbs.length = 0; G.hunters.length = 0;
+  for (const src of allInputs()) src.userData.held = null;
+}
+
+function startGame() {
+  resetEntities();
+  G.score = 0; G.wave = 0; G.combo = 0; G.shield = CFG.shieldMax;
+  G.slowmo = 0; G.shake = 0;
+  if (G.music) { G.music.intensity = 0.3; G.music.next = 0; }
+  G.phase = 'between';
+  G.breakTimer = 2.4;
+  say('SZAKADÉK', 'készülj', 2.2, '#57e2c4');
+}
+
+function startWave() {
+  G.wave++;
+  G.waveLeft = CFG.huntPerWave * G.wave + 2;
+  G.spawnQueue = G.waveLeft;
+  G.spawnTimer = 0.6;
+  G.phase = 'play';
+  say('HULLÁM ' + G.wave, G.waveLeft + ' ellenfél', 1.6, '#ffd166');
+  if (G.music) G.music.intensity = Math.min(1, 0.35 + G.wave*0.07);
+}
+
+function gameOver() {
+  G.phase = 'over';
+  resetEntities();
+  if (G.music) G.music.intensity = 0.25;
+  say('VÉGE', 'pont: ' + G.score + ' · legjobb: ' + G.best, 9999, '#ff5b6e');
+  G.restartLock = 1.2;
+}
+
+function updateGame(dt) {
+  // gömbök utánpótlása
+  if (G.phase === 'play' || G.phase === 'between') {
+    if (G.orbs.filter(o => o.live).length < CFG.orbTarget && Math.random() < dt*1.4) spawnOrb();
+  }
+
+  if (G.phase === 'between') {
+    G.breakTimer -= dt;
+    if (G.breakTimer <= 0) startWave();
+    return;
+  }
+
+  if (G.phase === 'play') {
+    if (G.spawnQueue > 0) {
+      G.spawnTimer -= dt;
+      if (G.spawnTimer <= 0) {
+        const tank = (G.wave % CFG.tankEvery === 0) && (G.spawnQueue === 1);
+        spawnHunter(tank);
+        G.spawnQueue--;
+        G.spawnTimer = Math.max(0.35, 1.5 - G.wave*0.09);
+      }
+    }
+    if (G.spawnQueue <= 0 && G.hunters.length === 0) {
+      G.phase = 'between';
+      G.breakTimer = CFG.waveBreak;
+      const bonus = 200 * G.wave;
+      addScore(bonus);
+      say('TISZTA', '+' + bonus + ' bónusz', 2.2, '#57e2c4');
+    }
+    return;
+  }
+
+  if (G.phase === 'over') {
+    if (G.restartLock > 0) { G.restartLock -= dt; return; }
+    for (const src of allInputs()) {
+      if (src.userData.pinching) { startGame(); return; }
+    }
+  }
+}
+
+// ---------- képkocka ----------
+function tick(time, frame) {
+  const raw = Math.min(G.clock.getDelta(), 0.05);
+  const dt = raw * (G.slowmo > 0 ? 0.4 : 1);
+  G.sfxThisFrame = 0;
+  if (G.slowmo > 0) G.slowmo -= raw;
+
+  const cam = G.renderer.xr.isPresenting ? G.renderer.xr.getCamera() : G.camera;
+  cam.getWorldPosition(G.head);
+  cam.getWorldQuaternion(Q1);
+  G.fwd.set(0,0,-1).applyQuaternion(Q1);
+  G.fwd.y *= 0.3;
+  if (G.fwd.lengthSq() < 1e-6) G.fwd.set(0,0,-1);
+  G.fwd.normalize();
+
+  if (frame) {
+    const rs = G.renderer.xr.getReferenceSpace();
+    if (rs) updatePlanes(frame, rs);
+  }
+
+  trackInputs(raw);
+  updateGame(raw);
+  if (G.phase === 'play' || G.phase === 'between') {
+    updateOrbs(dt);
+    updateHunters(dt);
+  }
+  updateRifts(raw);
+  stepParticles(raw);
+  stepMusic();
+
+  if (G.shake > 0) G.shake = Math.max(0, G.shake - raw*2.2);
+
+  drawHud();
+  followHead(G.hud, raw, 1.25, 0.45);
+  G.hud.mesh.scale.setScalar(1 + G.shake*0.07);
+  if (G.bigText.timer > 0) {
+    G.bigText.timer -= raw;
+    followHead(G.bigText, raw, 2.1, -0.2);
+    if (G.bigText.timer <= 0) G.bigText.mesh.visible = false;
+  }
+
+  if (!G.renderer.xr.isPresenting) {
+    const t = performance.now()*0.00013;
+    G.camera.position.set(Math.sin(t)*2.6, 1.75, Math.cos(t)*2.6);
+    G.camera.lookAt(0, 1.3, 0);
+  }
+
+  updateListener(cam);
+  G.renderer.render(G.scene, G.camera);
+}
+
+// ---------- session ----------
+let inFrame = false;
+try { inFrame = window.self !== window.top; } catch (e) { inFrame = true; }
+
+const ATTEMPTS = [
+  { mode:'immersive-ar', ar:true,  opts:{ optionalFeatures: WANTED } },
+  { mode:'immersive-ar', ar:true,  opts:undefined },
+  { mode:'immersive-vr', ar:false, opts:{ optionalFeatures: WANTED } },
+  { mode:'immersive-vr', ar:false, opts:undefined }
+];
+
+function renderCaps(list) {
+  capsEl.innerHTML = list.map(([l,s]) => '<span class="cap ' + (s||'') + '">' + l + '</span>').join('');
+}
+
+function onSession(session, a) {
+  G.session = session;
+  try { G.granted = session.enabledFeatures ? Array.from(session.enabledFeatures) : []; }
+  catch (e) { G.granted = []; }
+
+  const nice = { 'hand-tracking':'kézkövetés', 'plane-detection':'szobasíkok', 'anchors':'horgonyok' };
+  const caps = [[a.ar ? 'passthrough' : 'VR mód', a.ar ? 'on':'off']];
+  for (const f of WANTED) if (nice[f]) caps.push([nice[f], G.granted.indexOf(f)>=0 ? 'on':'off']);
+  renderCaps(caps);
+
+  G.fallbackRoom.visible = !a.ar || !G.usingRealRoom;
+  G.scene.background = null;
+  uiEl.style.display = 'none';
+
+  session.addEventListener('end', () => {
+    G.session = null;
+    G.phase = 'menu';
+    resetEntities();
+    G.fallbackRoom.visible = true;
+    uiEl.style.display = 'flex';
+    bestEl.textContent = 'Legjobb eredményed: ' + G.best;
+    statusEl.textContent = 'Kiléptél. Bármikor visszamehetsz.';
+  });
+
+  const spaces = ['local-floor','local'];
+  (function trySpace(i) {
+    if (i >= spaces.length) { G.renderer.xr.setSession(session); startGame(); return; }
+    session.requestReferenceSpace(spaces[i]).then(() => {
+      G.renderer.xr.setReferenceSpaceType(spaces[i]);
+      if (spaces[i] === 'local') G.scene.position.y = -1.2;
+      G.renderer.xr.setSession(session);
+      startGame();
+    }).catch(() => trySpace(i+1));
+  })(0);
+}
+
+function attempt(i, lastErr) {
+  if (i >= ATTEMPTS.length) {
+    statusEl.textContent = inFrame
+      ? 'Beágyazott nézetben nincs headset-hozzáférés. Nyisd meg külön fülön.'
+      : 'Nem indult el: ' + (lastErr && lastErr.message ? lastErr.message : 'ismeretlen hiba') +
+        ' — nyomd meg még egyszer a gombot.';
+    return;
+  }
+  const a = ATTEMPTS[i];
+  let p;
+  try { p = a.opts ? navigator.xr.requestSession(a.mode, a.opts) : navigator.xr.requestSession(a.mode); }
+  catch (err) { attempt(i+1, err); return; }
+  p.then(s => onSession(s, a)).catch(err => attempt(i+1, err));
+}
+
+function startSession() {
+  if (!navigator.xr) { statusEl.textContent = 'Nincs WebXR ezen a lapon. Nyisd meg a Quest böngészőjében.'; return; }
+  initAudio();
+  if (G.audio && G.audio.ctx.state === 'suspended') G.audio.ctx.resume().catch(()=>{});
+  statusEl.textContent = 'Indítás…';
+  attempt(0, null);
+}
+
+function probe() {
+  const secure = window.isSecureContext === true;
+  const base = [
+    ['biztonságos kontextus', secure ? 'on':'off'],
+    ['WebXR', navigator.xr ? 'on':'off'],
+    ['keretben: ' + (inFrame ? 'igen':'nem'), inFrame ? 'off':'on']
+  ];
+  renderCaps(base);
+  if (!navigator.xr) {
+    statusEl.textContent = inFrame
+      ? 'Beágyazott nézetben nincs headset-hozzáférés. Nyisd meg külön fülön.'
+      : 'Ez a böngésző nem támogatja a WebXR-t. Nyisd meg a Quest böngészőjében.';
+    return;
+  }
+  let settled = false;
+  setTimeout(() => { if (!settled) { statusEl.textContent = 'Az ellenőrzés nem válaszolt — próbáld meg a belépést.'; enterEl.disabled = false; } }, 2500);
+
+  navigator.xr.isSessionSupported('immersive-ar').then(ar => {
+    if (ar) {
+      settled = true;
+      renderCaps(base.concat([['immersive-ar','on']]));
+      statusEl.textContent = 'Quest észlelve — passthrough módban indul.';
+      enterEl.disabled = false;
+      return;
+    }
+    return navigator.xr.isSessionSupported('immersive-vr').then(vr => {
+      settled = true;
+      renderCaps(base.concat([['immersive-ar','off'],['immersive-vr', vr?'on':'off']]));
+      if (vr) { statusEl.textContent = 'VR mód elérhető (passthrough nélkül).'; enterEl.disabled = false; }
+      else statusEl.textContent = 'Nincs elérhető headset ezen az eszközön.';
+    });
+  }).catch(err => {
+    settled = true;
+    statusEl.textContent = 'Ellenőrzési hiba: ' + err.message + ' — próbáld meg a belépést.';
+    enterEl.disabled = false;
+  });
+}
+
+try {
+  init();
+  probe();
+} catch (err) {
+  statusEl.textContent = 'Indítási hiba: ' + err.message;
+  console.error(err);
+}
+
+enterEl.addEventListener('click', startSession);
+</script>
+</body>
+</html>

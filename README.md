@@ -124,6 +124,7 @@ python3 -m http.server 8080 --bind 127.0.0.1
 |---|---|
 | `/` | az eredeti demó — fizika, megfogás, térbeli panel |
 | `/lab` | **Szobalabor**: kézkövetés, a valódi szoba síkjai, térbeli hang |
+| `/arena` | **Szakadék** — teljes játék: hullámok, pontszám, kombó, pajzs, generatív zene |
 
 A `lab/` a Quest 3 fejlettebb WebXR-képességeit használja, mindet
 *opcionálisan*: nincs egyetlen `requiredFeature` sem, így ha valamelyik nem
@@ -139,6 +140,27 @@ A `lab/` a Quest 3 fejlettebb WebXR-képességeit használja, mindet
 A panel fölötti kijelző élőben mutatja a felismert síkok és tárgyak számát,
 a követett kezeket és az fps-t. A belépés előtti sor pedig kiírja, melyik
 képességet adta meg ténylegesen a rendszer.
+
+## Szakadék (`/arena`)
+
+Hullám-alapú MR-játék, ami a `/lab` alapjaira épül.
+
+- **szakadékok a valódi falaidon** — a felismert függőleges síkokra kerülnek,
+  ha nincs felismert szoba, virtuális gyűrűbe
+- **kék gömb**: elkapod csippentéssel vagy ravasszal, ez a lőszer
+- **piros ellenfél**: dobott gömbbel vagy gyorsan mozgó kézzel (>1,6 m/s)
+  semmisíthető meg; minden 4. hullámban jön egy háromtalálatos nehéz ellenfél
+- **pajzs**: három van, aki átjut, elvisz egyet
+- **kombó**: szakadék nélküli sorozat, minden 5 találat után +1 szorzó
+- **generatív zene**: nincs hangfájl — lábdob, basszus, pergő és arpeggio
+  ütemezve a Web Audio óráján, a sűrűsége a kombóval nő
+- **részecskék**: 500 pontból álló készlet, egyetlen draw call
+- a legjobb eredmény `localStorage`-ban marad meg
+
+Játéklogika ellenőrizve headless Chromiumban, a frissítőfüggvényeket
+közvetlenül hajtva: fázisváltások, hullámindítás, pajzsvesztés és
+játék vége, dobással és ütéssel való ölés, a lassú kéz hatástalansága,
+részecske-életciklus, kombószorzó és a legjobb eredmény mentése.
 
 ## Ellenőrzés
 
