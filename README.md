@@ -304,6 +304,42 @@ Bűncselekmény nélkül a szint magától lecseng.
 15 perces nappal–éjszaka kör: mozgó nap, alkonyi színek, csillagok,
 kigyulladó ablakok és utcalámpák. A B/Y gombbal azonnal váltható.
 
+### Utólag javított hibák (headsetes visszajelzés után)
+
+**A fő hiba: 180 fokkal el voltál fordítva az autóban.** A kamerák a `-Z`
+tengely felé néznek, az autó eleje viszont a `+Z` (ott vannak a fényszórók).
+Vezetésnél a rig forgatását az autó szögére állítottam, ezért **hátrafelé
+néztél a kocsiban** — innen jött, hogy az autók hátrafelé mennek, és hogy
+vezetés helyett vonszolásnak érződött. Javítva: `rig.rotation.y = head + π`.
+Mérve: nézésirány · haladásirány = **1.000**.
+
+Ugyanitt: alacsonyabb ülésmagasság (−45 cm), erősebb gyorsulás és
+112 km/h végsebesség, elforduló kormány, és egy **zárt pilótafülke**
+(műszerfal, A- és B-oszlop, tető, ajtók, ülés, tükrök) — ez adja a rögzített
+viszonyítási pontot, ami VR-ben a rosszullét ellen a legfontosabb.
+
+**Az autók most elütnek.** A karosszéria saját terében vizsgáljuk a
+találatot: a forgalmi autó elgázol téged (sebességtől függő sebzéssel és
+ellökéssel), te pedig elgázolod a járókelőket és a rendőröket.
+
+**Falba bugolás.** Eddig csak a rig közepére volt ütközés, a fej viszont
+fizikai lépésnél akár métert is eltérhet ettől — így be lehetett sétálni a
+falba. Most a **valódi fejpozícióra** van ütközés, kitolással a kisebb
+átfedésű tengely mentén. Kiszálláskor is szabad helyet keresünk az autó körül.
+
+**Kezdőpozíciók.** Az autók és a járókelők eddig a (0,0,0) pontban jöttek
+létre, és csak az első frissítéskor kerültek a helyükre. Most rögtön a
+sávjukban, illetve a járdán indulnak.
+
+### Látvány
+Szegélykő minden blokk körül, zebra a sugárutak kereszteződéseinél, párkány
+az épületek tetőélén, tetőgépészet és víztartály, **neonfeliratok** a
+belvárosban és az üzleti negyedben, földszinti kirakat-fénycsíkok, autó-
+fényszórók és hátsó lámpák, valamint felhők az égen. A neonok és a lámpák
+a napszakkal gyulladnak ki.
+
+Terhelés alatt: **23 rajzolási hívás, 142 042 háromszög.**
+
 ### Ellenőrzés
 30 viselkedés mérve headless Chromiumban: városgenerálás és kerületek,
 épületütközés járásnál és lövedéknél, forgalom mozgása és sávtartása

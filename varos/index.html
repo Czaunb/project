@@ -116,7 +116,8 @@ const CFG={
   peds:150,             // járókelő robot
   drawDist:330,
   maxBullets:200, maxEnemyShots:140, maxParticles:1600,
-  carAccel:9.5, carBrake:16, carTopSpeed:24, carReverse:7, carSteer:1.5, carGrip:5.5,
+  seatDrop:-0.45,       // ennyivel ülsz lejjebb az autóban
+  carAccel:11.5, carBrake:19, carTopSpeed:31, carReverse:8, carSteer:1.9, carGrip:5.5,
   wantedDecay:14,       // mp bűncselekmény nélkül, mire csökken egy szint
   copPerStar:2
 };
@@ -144,7 +145,7 @@ const S={
   sun:null,sunTarget:null,hemi:null,sky:null,skyMat:null,
   time:0.34,              // 0..1 napszak (0.34 ≈ reggel)
   night:0,
-  hp:100,score:0,kills:0,iFrame:0,
+  hp:100,score:0,kills:0,iFrame:0,baseY:0,
   hud:null,banner:null,minimap:null,
   audio:null,music:null,sfxN:0,
   phase:'menu',granted:[],session:null,stats:{calls:0,fps:0,tris:0},
@@ -277,7 +278,7 @@ function districtAt(i,j){
 
 function buildCity(){
   const t0=performance.now();
-  const wallM=Mesher(), roofM=Mesher(), groundM=Mesher(), markM=Mesher(), parkM=Mesher();
+  const wallM=Mesher(), roofM=Mesher(), groundM=Mesher(), markM=Mesher(), parkM=Mesher(), neonM=Mesher();
   const boxes=[];
 
   // --- alapaszfalt az egész világ alatt ---
@@ -294,6 +295,12 @@ function buildCity(){
 
       // járda a blokk pereme körül (egy kicsit megemelve)
       plate(groundM,cx,cz,bw,bd,0.14,0x6c7178,TILE);
+      // szegélykő: a járda pereme, ettől olvasható az utca
+      const cu=0.16;
+      box(groundM,cx,0.07,cz+bd/2,bw,0.15,cu*2,0x8d939b,TILE,false,true);
+      box(groundM,cx,0.07,cz-bd/2,bw,0.15,cu*2,0x8d939b,TILE,false,true);
+      box(groundM,cx+bw/2,0.07,cz,cu*2,0.15,bd,0x8d939b,TILE,false,true);
+      box(groundM,cx-bw/2,0.07,cz,cu*2,0.15,bd,0x8d939b,TILE,false,true);
 
       // telekhatárok
       const ix0=x0+CITY.walk, ix1=x1-CITY.walk, iz0=z0+CITY.walk, iz1=z1-CITY.walk;
@@ -344,8 +351,45 @@ function buildCity(){
             // antenna
             if(h2(i,j,150+k)>0.55) box(roofM,px,H+H2+3,pz,0.25,6,0.25,0x555b63,TILE);
           }
+          // párkány a tetőélen — megtöri a doboz sziluettjét
+          box(roofM,px,H+0.18,pz,w+0.55,0.36,d2+0.55,0x22262b,TILE,false,true);
+          // tetőgépészet
+          if(floors>3){
+            const nU=1+Math.floor(h2(i,j,160+k)*2);
+            for(let u=0;u<nU;u++){
+              const ux=px+(h2(i,j,170+k+u)-0.5)*w*0.55, uz=pz+(h2(i,j,180+k+u)-0.5)*d2*0.55;
+              const uh=1.0+h2(i,j,190+k+u)*1.4;
+              box(roofM,ux,H+uh/2,uz,1.8+h2(i,j,200+k+u)*1.6,uh,1.6+h2(i,j,210+k+u)*1.4,0x3a3f46,TILE);
+            }
+            if(h2(i,j,220+k)>0.6){                     // víztartály
+              box(roofM,px+w*0.28,H+2.2,pz-d2*0.28,1.9,1.5,1.9,0x4a3f34,TILE);
+              for(const s2 of [[-0.7,-0.7],[0.7,-0.7],[-0.7,0.7],[0.7,0.7]])
+                box(roofM,px+w*0.28+s2[0],H+0.75,pz-d2*0.28+s2[1],0.14,1.5,0.14,0x3a3129,TILE);
+            }
+          }
           // földszinti üzletsáv
           plate(roofM,px,pz,w+0.5,d2+0.5,0.02,0x1a1d21,TILE);
+          box(roofM,px,1.9,pz,w+0.6,0.22,d2+0.6,0x141719,TILE,false,true);   // előtető
+
+          // NEONFELIRAT a belvárosban és az üzleti negyedben
+          if((dist.id==='belvaros'||dist.id==='uzleti')&&floors>=4&&h2(i,j,230+k)>0.42){
+            const NEON=[0xff2d7a,0x2df0ff,0xffd93d,0x7cff4d,0xb84dff,0xff6a2d,0x4da6ff];
+            const nc=NEON[Math.floor(h2(i,j,240+k)*NEON.length)];
+            const face=Math.floor(h2(i,j,250+k)*4);
+            const hy=CITY.floorH*(1.6+h2(i,j,260+k)*(floors-2.2));
+            const len=Math.min(w,d2)*(0.45+h2(i,j,270+k)*0.35);
+            const vert=h2(i,j,280+k)>0.55;
+            if(face===0)      box(neonM,px,hy,pz+d2/2+0.22,vert?0.7:len,vert?len:1.05,0.16,nc,TILE);
+            else if(face===1) box(neonM,px,hy,pz-d2/2-0.22,vert?0.7:len,vert?len:1.05,0.16,nc,TILE);
+            else if(face===2) box(neonM,px+w/2+0.22,hy,pz,0.16,vert?len:1.05,vert?0.7:len,nc,TILE);
+            else              box(neonM,px-w/2-0.22,hy,pz,0.16,vert?len:1.05,vert?0.7:len,nc,TILE);
+          }
+          // földszinti kirakat-fénycsík
+          if(dist.id!=='ipari'&&h2(i,j,290+k)>0.35){
+            const sc=[0xffcf6a,0x9ad8ff,0xffa0c8,0xa8ffb0][Math.floor(h2(i,j,300+k)*4)];
+            box(neonM,px,1.35,pz+d2/2+0.30,w*0.72,0.14,0.10,sc,TILE);
+            box(neonM,px,1.35,pz-d2/2-0.30,w*0.72,0.14,0.10,sc,TILE);
+          }
           boxes.push({x:px,z:pz,hx:w/2,hz:d2/2,y:H});
         }
       }
@@ -363,6 +407,20 @@ function buildCity(){
     }
   }
 
+  // zebra a sugárutak kereszteződéseinél
+  for(let i=0;i<=CITY.blocks;i+=CITY.avenueEvery){
+    for(let j=0;j<=CITY.blocks;j+=CITY.avenueEvery){
+      const x=nodeX(i), z=nodeX(j), rw=roadW(i)/2, rz=roadW(j)/2;
+      for(let k2=0;k2<6;k2++){
+        const o=-rw+1.2+k2*((rw*2-2.4)/5);
+        plate(markM,x+o,z+rz+1.9,0.55,2.6,0.03,0xe8e8e8,1);
+        plate(markM,x+o,z-rz-1.9,0.55,2.6,0.03,0xe8e8e8,1);
+        plate(markM,x+rw+1.9,z+o,2.6,0.55,0.03,0xe8e8e8,1);
+        plate(markM,x-rw-1.9,z+o,2.6,0.55,0.03,0xe8e8e8,1);
+      }
+    }
+  }
+
   const facade=facadeTextures(), roadTex=roadTexture();
 
   const wallMat=new THREE.MeshStandardMaterial({map:facade.day,emissiveMap:facade.night,
@@ -373,7 +431,9 @@ function buildCity(){
   const parkMat=new THREE.MeshStandardMaterial({vertexColors:true,roughness:0.95});
 
   const add=(M,mat,name)=>{const g=mFinish(M);const m=new THREE.Mesh(g,mat);m.name=name;S.scene.add(m);return m;};
+  S.neonMat=new THREE.MeshBasicMaterial({vertexColors:true,toneMapped:false});
   S.wallMesh=add(wallM,wallMat,'falak');
+  add(neonM,S.neonMat,'neonok');
   add(roofM,roofMat,'tetok');
   add(groundM,groundMat,'talaj');
   add(markM,markMat,'felfestes');
@@ -396,7 +456,7 @@ function buildCity(){
   buildRoadGraph();
   buildProps();
 
-  const tris=(wallM.i.length+roofM.i.length+groundM.i.length+markM.i.length+parkM.i.length)/3;
+  const tris=(wallM.i.length+roofM.i.length+groundM.i.length+markM.i.length+parkM.i.length+neonM.i.length)/3;
   return {ms:Math.round(performance.now()-t0),buildings:boxes.length,tris:Math.round(tris)};
 }
 
@@ -511,6 +571,13 @@ function carGeo(kind){
       box(M,sx*wx,wy,sz*wz,0.26,wr*2,wr*2,0x0d0f13,TILE);
   });
 }
+function carLightGeo(kind){
+  const fz=kind===1?2.60:2.12, bz=kind===1?-2.60:-2.12, w=kind===1?1.86:1.68, y=kind===1?0.52:0.40;
+  return geoFrom(M=>{
+    box(M,0,y,fz+0.06,w,0.24,0.08,0xfff0c8,TILE);     // fényszóró
+    box(M,0,y,bz-0.06,w,0.20,0.08,0xff3a3a,TILE);     // hátsó lámpa
+  });
+}
 function buildCars(){
   const mats=[],geos=[];
   for(let k=0;k<3;k++){
@@ -520,11 +587,15 @@ function buildCars(){
   }
   const per=Math.ceil(CFG.traffic/3)+4;
   S.carMeshes=[];
+  S.lightMat=new THREE.MeshBasicMaterial({vertexColors:true,toneMapped:false});
   for(let k=0;k<3;k++){
     const im=new THREE.InstancedMesh(geos[k],mats[k],per);
     im.frustumCulled=false; im.count=0;
     S.scene.add(im);
-    S.carMeshes.push({im,used:0});
+    const lm=new THREE.InstancedMesh(carLightGeo(k),S.lightMat,per);
+    lm.frustumCulled=false; lm.count=0;
+    S.scene.add(lm);
+    S.carMeshes.push({im,lm,used:0});
   }
   const PALETTE=[0xd8dde4,0x2b3440,0x8c1d2a,0x1f4f7a,0x2f6b43,0xd4a017,0x6b3fa0,0x101318,0xb85c1e,0xe8e2d0];
   S.cars.length=0;
@@ -533,15 +604,64 @@ function buildCars(){
     const i=Math.floor(Math.random()*(CITY.blocks+1)), j=Math.floor(Math.random()*(CITY.blocks+1));
     const d=randomDir(i,j,0,0);
     if(!validDir(i,j,d[0],d[1])) continue;
-    S.cars.push({kind:k,i,j,di:d[0],dj:d[1],t:Math.random(),
+    const t0=Math.random();
+    const car={kind:k,i,j,di:d[0],dj:d[1],t:t0,
       speed:7+Math.random()*7, want:7+Math.random()*7,
       col:PALETTE[Math.floor(Math.random()*PALETTE.length)],
-      pos:new THREE.Vector3(),head:0,player:false,hp:14,alive:true,
-      cop:false,brake:0});
+      pos:new THREE.Vector3(),head:Math.atan2(d[0],d[1]),player:false,hp:14,alive:true,
+      cop:false,brake:0};
+    laneP(i,j,d[0],d[1],t0,1,car.pos);      // rögtön a sávjában induljon, ne az origóban
+    S.cars.push(car);
   }
 }
 
 function carEdgeLen(c){ return CITY.block; }
+
+// pont az autó karosszériáján belül van-e (az autó saját terében nézve)
+function inCarBox(c,x,z,pad){
+  const dx=x-c.pos.x, dz=z-c.pos.z;
+  const ch=Math.cos(c.head), sh=Math.sin(c.head);
+  const lx=dx*ch-dz*sh, lz=dx*sh+dz*ch;
+  const hw=(c.kind===1?1.12:1.00)+(pad||0), hl=(c.kind===1?2.65:2.25)+(pad||0);
+  return Math.abs(lx)<hw && Math.abs(lz)<hl;
+}
+// gázolás: járókelők és a játékos
+function carRunOver(c,dt){
+  const sp=Math.abs(c.speed!==undefined?c.speed:c.want);
+  if(sp<2.2) return;
+  // járókelők
+  for(const p of S.peds){
+    if(!p.alive) continue;
+    if(Math.abs(p.pos.x-c.pos.x)>7||Math.abs(p.pos.z-c.pos.z)>7) continue;
+    if(inCarBox(c,p.pos.x,p.pos.z,0.3)){
+      p.alive=false;
+      burst(p.pos,0xc9d2de,30,3.2,1.2);
+      sfx('crash',p.pos,0.7);
+      scare(p.pos,24);
+      if(c===S.inCar){ crime(1); S.score+=60; }
+    }
+  }
+  // rendőrök
+  for(const k of S.cops){
+    if(!k.alive) continue;
+    if(inCarBox(c,k.pos.x,k.pos.z,0.3)){
+      k.hp-=sp*1.4;
+      burst(k.pos,0x3fa0ff,18,3,1.2);
+      if(k.hp<=0){k.alive=false;sfx('kill',k.pos,0.7);if(c===S.inCar){crime(1);S.score+=250;}}
+    }
+  }
+  // a JÁTÉKOS elütése
+  if(c!==S.inCar && !S.inCar && inCarBox(c,S.head.x,S.head.z,0.35)){
+    const dmg=Math.min(60,10+sp*3.2);
+    // lökés az autó haladási irányába
+    _b.set(Math.sin(c.head),0,Math.cos(c.head)).multiplyScalar(2.2+sp*0.1);
+    S.rig.position.x+=_b.x; S.rig.position.z+=_b.z;
+    burst(S.head,0xff4d6d,26,3,1.2);
+    sfx('crash',S.head,0.9);
+    hurt(dmg,c.pos);
+    c.speed*=0.45;
+  }
+}
 
 function updateTraffic(dt){
   // sávfoglaltság: melyik autó hol tart ugyanazon az élen
@@ -578,6 +698,7 @@ function updateTraffic(dt){
       }
       laneP(c.i,c.j,c.di,c.dj,c.t,1,c.pos);
       c.head=Math.atan2(c.di,c.dj);
+      carRunOver(c,dt);
     }
   }
   drawCars();
@@ -593,13 +714,14 @@ function drawCars(){
     _q.setFromAxisAngle(UP,c.head);
     _m.compose(c.pos,_q,_s.set(1,1,1));
     slot.im.setMatrixAt(slot.used,_m);
+    slot.lm.setMatrixAt(slot.used,_m);
     _col.setHex(c.cop?0x1b2740:c.col);
     slot.im.setColorAt(slot.used,_col);
     slot.used++;
   }
   for(const m of S.carMeshes){
-    m.im.count=m.used;
-    m.im.instanceMatrix.needsUpdate=true;
+    m.im.count=m.used;  m.im.instanceMatrix.needsUpdate=true;
+    m.lm.count=m.used;  m.lm.instanceMatrix.needsUpdate=true;
     if(m.im.instanceColor) m.im.instanceColor.needsUpdate=true;
   }
 }
@@ -637,7 +759,13 @@ function exitCar(){
   const d=randomDir(gi,gj,0,0); c.di=d[0]; c.dj=d[1];
   // a játékos az autó mellé kerül
   _a.set(Math.cos(c.head)*2.4,0,-Math.sin(c.head)*2.4);
-  S.rig.position.set(c.pos.x+_a.x,0,c.pos.z+_a.z);
+  S.rig.position.set(c.pos.x+_a.x,S.baseY,c.pos.z+_a.z);
+  S.rig.rotation.y=c.head+Math.PI;
+  // ne rakjuk falba: keressünk szabad helyet az autó körül
+  for(let k=0;k<8&&blockedAt(S.rig.position.x,S.rig.position.z,0.6);k++){
+    const ang=c.head+k*0.785;
+    S.rig.position.set(c.pos.x+Math.sin(ang)*2.8,S.baseY,c.pos.z+Math.cos(ang)*2.8);
+  }
   S.inCar=null;
   S.cockpit.visible=false;
   sfx('door',c.pos,0.6);
@@ -670,10 +798,13 @@ function updateDriving(dt){
     c.pos.x=Math.max(-lim,Math.min(lim,nx));
     c.pos.z=Math.max(-lim,Math.min(lim,nz));
   }
-  // a rig ül az autóban
-  S.rig.position.set(c.pos.x,0,c.pos.z);
-  S.rig.rotation.y=c.head;
-  S.cockpit.position.set(0,0,0);
+  // a rig ül az autóban. A kamera a -Z felé néz, az autó eleje a +Z,
+  // ezért kell a fél fordulat — enélkül hátrafelé néznél a kocsiban.
+  S.rig.position.set(c.pos.x,S.baseY+CFG.seatDrop,c.pos.z);
+  S.rig.rotation.y=c.head+Math.PI;
+  S.cockpit.position.set(0,-CFG.seatDrop,0);
+  if(S.wheelMesh) S.wheelMesh.rotation.z=-1.02 + steer*0.9;
+  carRunOver(c,dt);
   // sebességgel arányos vignetta
   S.vigAmt=Math.min(CFG.vigMax*0.75,Math.abs(c.speed)/CFG.carTopSpeed*CFG.vigMax*0.75);
   if(S.engine) S.engine.set(Math.abs(c.speed));
@@ -681,17 +812,33 @@ function updateDriving(dt){
 
 function buildCockpit(){
   const g=new THREE.Group();
-  const mat=new THREE.MeshStandardMaterial({color:0x1a1f27,roughness:0.65,metalness:0.3,side:THREE.DoubleSide});
-  const dash=new THREE.Mesh(new THREE.BoxGeometry(1.7,0.28,0.5),mat); dash.position.set(0,1.02,-0.85); g.add(dash);
-  const wheel=new THREE.Mesh(new THREE.TorusGeometry(0.17,0.026,8,20),
-    new THREE.MeshStandardMaterial({color:0x2b3240,roughness:0.5,metalness:0.4}));
-  wheel.position.set(0,1.12,-0.62); wheel.rotation.x=-1.05; g.add(wheel);
-  const hood=new THREE.Mesh(new THREE.BoxGeometry(1.9,0.06,1.5),mat); hood.position.set(0,0.98,-1.85); g.add(hood);
+  const body=new THREE.MeshStandardMaterial({color:0x171c24,roughness:0.62,metalness:0.35,side:THREE.DoubleSide});
+  const trim=new THREE.MeshStandardMaterial({color:0x2a3240,roughness:0.5,metalness:0.5});
+  const A=(geo,mat,x,y,z,rx,ry,rz)=>{const m=new THREE.Mesh(geo,mat);m.position.set(x,y,z);
+    if(rx)m.rotation.x=rx;if(ry)m.rotation.y=ry;if(rz)m.rotation.z=rz;g.add(m);return m;};
+
+  // műszerfal, kormány, motorháztető (a játékos a -Z felé néz)
+  A(new THREE.BoxGeometry(1.76,0.30,0.55),body, 0,1.02,-0.92,-0.18);
+  A(new THREE.BoxGeometry(1.70,0.10,0.34),trim, 0,1.16,-0.80,-0.55);   // műszerfal teteje
+  const wheel=A(new THREE.TorusGeometry(0.175,0.028,10,24),trim, 0,1.10,-0.66,-1.02);
+  A(new THREE.BoxGeometry(0.30,0.03,0.03),trim, 0,1.10,-0.66,-1.02);
+  S.wheelMesh=wheel;
+  A(new THREE.BoxGeometry(1.94,0.07,1.7),body, 0,0.97,-2.00,0.03);     // motorháztető
+  A(new THREE.BoxGeometry(1.86,0.10,0.16),trim, 0,1.00,-2.84);         // első perem
+
+  // oszlopok, tető, oldalajtók — ez adja a rögzített viszonyítási pontot
   for(const sx of [-1,1]){
-    const p=new THREE.Mesh(new THREE.BoxGeometry(0.07,1.2,0.07),mat);
-    p.position.set(sx*0.92,1.5,-0.8); p.rotation.z=sx*0.12; g.add(p);
+    A(new THREE.BoxGeometry(0.09,1.30,0.09),body, sx*0.90,1.52,-0.92,0,0,sx*0.17);  // A-oszlop
+    A(new THREE.BoxGeometry(0.09,1.10,0.09),body, sx*0.92,1.58, 0.55);              // B-oszlop
+    A(new THREE.BoxGeometry(0.07,0.72,1.55),body, sx*0.95,0.86,-0.18);              // ajtó
+    A(new THREE.BoxGeometry(0.05,0.10,1.45),trim, sx*0.99,1.22,-0.18);              // ablakperem
+    A(new THREE.BoxGeometry(0.16,0.10,0.07),trim, sx*0.98,1.30,-1.02);              // tükör
   }
-  const roof=new THREE.Mesh(new THREE.BoxGeometry(1.85,0.06,1.9),mat); roof.position.set(0,2.06,-0.1); g.add(roof);
+  A(new THREE.BoxGeometry(1.92,0.07,2.1),body, 0,2.12,-0.10);          // tető
+  A(new THREE.BoxGeometry(0.34,0.10,0.07),trim, 0,1.92,-0.80);         // belső tükör
+  A(new THREE.BoxGeometry(1.5,0.55,0.12),body, 0,0.70,0.72,0.15);      // ülés háttámla
+  A(new THREE.BoxGeometry(1.5,0.10,0.75),body, 0,0.42,0.30);           // ülőlap
+
   g.visible=false;
   S.rig.add(g);
   S.cockpit=g;
@@ -724,10 +871,19 @@ function buildPeds(){
   for(let n=0;n<CFG.peds;n++){
     const i=Math.floor(Math.random()*(CITY.blocks+1)), j=Math.floor(Math.random()*(CITY.blocks+1));
     const d=randomDir(i,j,0,0);
-    S.peds.push({i,j,di:d[0],dj:d[1],t:Math.random(),
-      pos:new THREE.Vector3(),head:0,speed:0.8+Math.random()*0.5,base:0.8+Math.random()*0.5,
+    const t0=Math.random();
+    const ped={i,j,di:d[0],dj:d[1],t:t0,
+      pos:new THREE.Vector3(),head:Math.atan2(d[0],d[1]),
+      speed:0.8+Math.random()*0.5,base:0.8+Math.random()*0.5,
       col:COLS[Math.floor(Math.random()*COLS.length)],
-      state:'walk',fear:0,ph:Math.random()*6.3,alive:true,hp:4,cop:false});
+      state:'walk',fear:0,ph:Math.random()*6.3,alive:true,hp:4,cop:false};
+    // rögtön a járdán induljon
+    const n0=S.nodes[i][j], n1=S.nodes[i+d[0]]&&S.nodes[i+d[0]][j+d[1]];
+    if(n1){
+      const off=roadW(d[0]!==0?j:i)/2+CITY.walk*0.5;
+      ped.pos.set(n0.x+(n1.x-n0.x)*t0+(-d[1])*off,0,n0.z+(n1.z-n0.z)*t0+d[0]*off);
+    }else ped.pos.set(n0.x,0,n0.z);
+    S.peds.push(ped);
   }
 }
 function updatePeds(dt){
@@ -1064,9 +1220,27 @@ function locomotion(dt){
   S.rig.position.x=Math.max(-lim,Math.min(lim,S.rig.position.x));
   S.rig.position.z=Math.max(-lim,Math.min(lim,S.rig.position.z));
 
+  depenetrate();
+
   const speed=S.vel.length();
   const target=Math.min(CFG.vigMax,speed/CFG.run*CFG.vigMax);
   S.vigAmt+=(target-S.vigAmt)*Math.min(1,(speed>0.05?CFG.vigSpeed:22)*dt);
+}
+
+// A fej a rig közepétől akár métert is eltérhet, ha fizikailag lépsz egyet
+// a szobádban — ezért a VALÓDI fejpozícióra is kell ütközés, különben
+// be lehet sétálni a falba. A kisebb átfedésű tengely mentén tolunk ki.
+function depenetrate(){
+  const r=0.34;
+  for(let pass=0;pass<3;pass++){
+    const b=blockedAt(S.head.x,S.head.z,r);
+    if(!b) return;
+    const dx=S.head.x-b.x, dz=S.head.z-b.z;
+    const ox=(b.hx+r)-Math.abs(dx), oz=(b.hz+r)-Math.abs(dz);
+    if(ox<=0||oz<=0) return;
+    if(ox<oz){ const push=(dx>=0?ox:-ox); S.rig.position.x+=push; S.head.x+=push; }
+    else     { const push=(dz>=0?oz:-oz); S.rig.position.z+=push; S.head.z+=push; }
+  }
 }
 
 // ============================================================
@@ -1411,6 +1585,16 @@ function buildSky(){
         float s=max(0.0,dot(d,normalize(sunDir)));
         c+=sunCol*pow(s,180.0)*2.2;                 // napkorong
         c+=sunCol*pow(s,7.0)*0.24*(1.0-night);      // fénykoszorú
+        // felhők: két rétegű eltolt zaj
+        if(d.y>0.04){
+          vec2 uv=d.xz/max(0.08,d.y)*0.12;
+          float c1=sin(uv.x*2.1+1.3)*sin(uv.y*1.7-0.4);
+          float c2=sin(uv.x*4.3-2.1)*sin(uv.y*3.9+1.1);
+          float cl=smoothstep(0.22,0.72,c1*0.65+c2*0.35+0.18);
+          cl*=smoothstep(0.04,0.30,d.y);
+          vec3 cc=mix(vec3(0.92,0.95,1.0),vec3(0.16,0.19,0.26),night);
+          c=mix(c,cc,cl*0.55);
+        }
         // csillagok éjjel
         if(night>0.25&&d.y>0.02){
           vec3 g=floor(d*140.0);
@@ -1448,6 +1632,8 @@ function updateSky(dt){
 
   if(S.wallMat) S.wallMat.emissiveIntensity=n*1.25;
   if(S.lampMat) S.lampMat.emissiveIntensity=n*2.0;
+  if(S.lightMat) S.lightMat.color.setScalar(0.22+n*0.95);
+  if(S.neonMat) S.neonMat.color.setScalar(0.30+n*0.90);
   if(S.scene.fog){
     S.scene.fog.color.setHex(0xb8cede).lerp(_col.setHex(0xff9a5c),dusk*(1-n)*0.7).lerp(_col.setHex(0x0b1018),n);
     S.renderer.setClearColor(S.scene.fog.color,1);
@@ -1773,7 +1959,7 @@ function onSession(session){
     if(i>=sp.length){S.renderer.xr.setSession(session);start();return;}
     session.requestReferenceSpace(sp[i]).then(()=>{
       S.renderer.xr.setReferenceSpaceType(sp[i]);
-      if(sp[i]==='local')S.rig.position.y=-1.2;
+      if(sp[i]==='local'){S.baseY=-1.2;S.rig.position.y=-1.2;}
       S.renderer.xr.setSession(session);start();
     }).catch(()=>t(i+1));
   })(0);
