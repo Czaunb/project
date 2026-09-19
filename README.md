@@ -127,6 +127,7 @@ python3 -m http.server 8080 --bind 127.0.0.1
 | `/arena` | **Szakadék** — hullámok, pontszám, kombó, pajzs, generatív zene |
 | `/game` | **Zárótűz** — pisztoly + pajzs, telegrafált támadások, 5 ellenféltípus |
 | `/prizma` | **Prizma** — teljes VR műhely: járkálás, 4 zóna, pályaépítő, 4 fegyver |
+| `/varos` | **Város** — nyílt világ: 952 épület, forgalom, robot járókelők, rendőrség |
 
 A `lab/` a Quest 3 fejlettebb WebXR-képességeit használja, mindet
 *opcionálisan*: nincs egyetlen `requiredFeature` sem, így ha valamelyik nem
@@ -255,7 +256,63 @@ a lőtéren 8 ellenféllel): **központ 56, lőtér 42, építő 11, végtelen 1
 A végtelen 30 000 objektuma egyetlen `InstancedMesh`, a hullámzása
 vertex shaderben fut, tehát a processzort nem terheli.
 
+### Város (`/varos`)
+
+Saját tervezésű nyílt világ. **Nem GTA-klón**: a Rockstar városa, karakterei
+és márkája szerzői jogvédett, azokból semmi nincs benne — ez a saját
+generátorunk saját geometriájával, saját textúráival.
+
+### A város
+968 × 968 méter, 22 × 22 blokk, **952 épület**, 126 ms alatt generálva.
+
+- **öt kerület** a központtól kifelé: Belváros (9–26 emelet), Üzleti negyed,
+  Lakónegyed, Ipari, és szórt Parkok
+- **sugárutak** minden 5. utcán, szélesebb úttesttel és felfestéssel
+- blokkonként 1, 2 vagy 4 telek; magas házaknál visszahúzott felső rész,
+  antennával
+- minden textúra kódból készül: a homlokzat ablakrácsa rajzolt canvas,
+  éjszakára külön emissziós réteggel
+
+### Technika, ami ezt lehetővé teszi
+A teljes város **néhány összeolvasztott geometriába** kerül — nem külön
+objektumok ezrei. A homlokzat UV-je valós méterhez skálázódik, ezért az
+ablakok minden épületen egyforma méretűek. Az autók, járókelők, rendőrök,
+lámpák és lövedékek mind `InstancedMesh`-ben vannak.
+
+Eredmény teljes terhelés alatt: **19 rajzolási hívás, 80 974 háromszög.**
+
+### Forgalom
+130 autó saját sávhálón, három karosszériatípus. Tartják a követési
+távolságot, lassítanak a kereszteződés előtt és ha eléd érnek. A
+karosszéria fehér a geometriában, a fényezést a példányszín adja — így egy
+rajzolási hívásból jön ki az összes szín.
+
+**Bármelyikbe beszállhatsz** (markolat). A vezetés arkád fizika: gáz, fék,
+tolatás, sebességfüggő kormányzás, épületütközés. VR-ben a pilótafülke
+adja a rögzített viszonyítási pontot, ami a rosszullét ellen a legfontosabb.
+
+### Robotok
+150 járókelő a járdán. Közelről feléd fordulnak; lövésre **megijednek és
+ellenkező irányba menekülnek**.
+
+### Körözés és rendőrség
+Civil vagy autó kilövése csillagot ad, 1-től 5-ig. Szintenként két rendőr
+érkezik, akik falat kerülgetve közelítenek, jeleznek, majd tüzelnek.
+Bűncselekmény nélkül a szint magától lecseng.
+
+### Napszak
+15 perces nappal–éjszaka kör: mozgó nap, alkonyi színek, csillagok,
+kigyulladó ablakok és utcalámpák. A B/Y gombbal azonnal váltható.
+
 ### Ellenőrzés
+30 viselkedés mérve headless Chromiumban: városgenerálás és kerületek,
+épületütközés járásnál és lövedéknél, forgalom mozgása és sávtartása
+(130/130 az úton maradt), járókelők sétája és menekülése, mind a négy
+fegyver, találat civilen, körözés emelkedése és lecsengése, rendőr
+közeledése és tüzelése, beszállás–vezetés–kiszállás, sebességkorlát,
+nappal–éjszaka váltás, rajzolási hívások és 60 mp folyamatos futás.
+
+## Ellenőrzés
 34 viselkedés mérve headless Chromiumban: kézhozzárendelés, zónák,
 járás iránya és tempója, vignetta be- és kikapcsolása, 45°-os fordulás
 **fejelmozdulás nélkül** (0,00000 m), mind a négy fegyver tüzelése és
