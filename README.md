@@ -269,6 +269,33 @@ Javítva közben: a `lookAt` a three.js-ben a **+Z** tengelyt fordítja a
 célpontra, nem a −Z-t. Emiatt a pajzsos lemeze és a boss gyenge pontjai
 is a hátoldalra kerültek — vagyis a bosst nem lehetett volna megölni.
 
+### Utólag javított fő hiba: a fejpozíció és a rig
+
+Az első headsetes próbán szinte semmi nem működött: rossz irányba vitt a
+kar, nem lehetett átlépni a zónák közt, és a bal kéz nem látszott.
+
+Egyetlen ok állt a háromból kettő mögött. A `renderer.xr.getCamera()`
+által adott kamera **nincs benne a jelenetgráfban** — nincs szülője —,
+ezért a `getWorldPosition()` a lokális mátrixát adja vissza világmátrixként,
+és így **kihagyja a rig-et**, amiben a játékos ül. A fej pozíciója és
+iránya nem világkoordinátában érkezett, hanem a righez képest.
+
+Emiatt az „előre" a rig kezdeti állásához tapadt (nem oda, amerre nézel),
+és az oszlopoktól mért távolság is rossz koordinátákból jött, tehát az
+átlépés sosem indult el. A korábbi demókban ez nem derült ki, mert ott
+nem volt rig — a kamera közvetlenül a világban ült.
+
+A javítás a fejpózt közvetlenül az XR képkockából veszi
+(`frame.getViewerPose`), és megszorozza a rig világmátrixával.
+
+A bal kéz azért tűnt el, mert a központban nincs eszköz a kézben, és
+semmilyen modell nem volt rajta. Most mindkét kontrolleren van látható
+modell, a fegyveresen célzósugárral.
+
+A regressziós teszt, ami elkapta volna: **eltolt és elfordított riggel**
+mérni a fejpozíciót és a mozgásirányt. A korábbi 34 teszt mind nullára
+állított riggel futott, ezért egyik sem fogta meg.
+
 ## Ellenőrzés
 30 viselkedés mérve headless Chromiumban: fegyver (lövés, tűzgyorsaság,
 tár, újratöltés, visszarúgás), átugrás elleni védelem, páncélos

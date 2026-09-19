@@ -126,6 +126,7 @@ const S={
 const _a=new THREE.Vector3(),_b=new THREE.Vector3(),_c=new THREE.Vector3(),_d=new THREE.Vector3(),
       _q=new THREE.Quaternion(),_m=new THREE.Matrix4(),_s=new THREE.Vector3(1,1,1),_col=new THREE.Color();
 const UP=new THREE.Vector3(0,1,0),ZAX=new THREE.Vector3(0,0,1);
+const HRAY=new THREE.Ray();
 
 // ===================== alap =====================
 function init(){
@@ -207,17 +208,36 @@ function buildHands(){
     c.userData={hand:null,src:null,prev:{},idx:i};
     c.addEventListener('connected',e=>{c.userData.src=e.data;c.userData.hand=(e.data&&e.data.handedness)||null;assignHands();});
     c.addEventListener('disconnected',()=>{c.userData.src=null;});
+    addHandModel(c);
     S.rig.add(c);
     S.ctrls.push(c);
   }
   assignHands();
 }
+function addHandModel(c){
+  const g=new THREE.Group();
+  const grip=new THREE.Mesh(new THREE.CapsuleGeometry(0.021,0.065,4,8),
+    new THREE.MeshStandardMaterial({color:0x2b3444,roughness:0.5,metalness:0.5}));
+  grip.rotation.x=-0.45;grip.position.set(0,-0.012,0.018);g.add(grip);
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(0.031,0.005,6,18),
+    new THREE.MeshBasicMaterial({color:0x48e6d0}));
+  ring.position.set(0,0.026,0.006);ring.rotation.x=-0.45;g.add(ring);
+  c.add(g);
+  // célzósugár — csak a fegyveres kézen látszik majd
+  const ray=new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0),new THREE.Vector3(0,0,-1)]),
+    new THREE.LineBasicMaterial({color:0x48e6d0,transparent:true,opacity:0.45}));
+  ray.scale.z=6;ray.visible=false;c.add(ray);
+  c.userData.ray=ray;
+}
+
 function assignHands(){
   let g=null,o=null;
   for(const c of S.ctrls){ if(c.userData.hand==='right')g=c; else if(c.userData.hand==='left')o=c; }
   if(!g)g=S.ctrls[0]||null;
   if(!o)o=S.ctrls.find(c=>c!==g)||S.ctrls[1]||null;
   S.gunHand=g;S.offHand=o;
+  for(const c of S.ctrls) if(c.userData.ray) c.userData.ray.visible=(c===g);
   if(S.gun&&g&&S.gun.group.parent!==g)g.add(S.gun.group);
   if(S.tool&&o&&S.tool.group.parent!==o)o.add(S.tool.group);
   if(S.wrist&&o&&S.wrist.mesh.parent!==o)o.add(S.wrist.mesh);
@@ -445,11 +465,11 @@ function sfx(kind,p,vol){
     case 'save':   tone(d,'triangle',600,900,t,0.1,v*0.5); tone(d,'triangle',900,1350,t+0.09,0.14,v*0.45); break;
   }
 }
-function listener(cam){
+function listener(){
   if(!S.audio)return;
   const l=S.audio.ctx.listener;
-  cam.getWorldPosition(_a);cam.getWorldQuaternion(_q);
-  _b.set(0,0,-1).applyQuaternion(_q);_c.set(0,1,0).applyQuaternion(_q);
+  _a.copy(S.head);
+  _b.set(0,0,-1).applyQuaternion(S.headQ);_c.set(0,1,0).applyQuaternion(S.headQ);
   if(l.positionX){l.positionX.value=_a.x;l.positionY.value=_a.y;l.positionZ.value=_a.z;
     l.forwardX.value=_b.x;l.forwardY.value=_b.y;l.forwardZ.value=_b.z;
     l.upX.value=_c.x;l.upY.value=_c.y;l.upZ.value=_c.z;}
@@ -819,8 +839,20 @@ function zoneHub(){
         _a.copy(S.head);_a.y=0;
         _b.copy(gt.g.position);_b.y=0;
         const d=_a.distanceTo(_b);
-        if(d<1.5){
-          gt.charge=Math.min(1,gt.charge+dt/1.1);
+        // célzás: a sugár elég közel megy-e az oszlophoz
+        let aimed=false;
+        if(S.gunHand){
+          S.gunHand.updateMatrixWorld(true);
+          _m.identity().extractRotation(S.gunHand.matrixWorld);
+          HRAY.origin.setFromMatrixPosition(S.gunHand.matrixWorld);
+          HRAY.direction.set(0,0,-1).applyMatrix4(_m).normalize();
+          _c.copy(gt.g.position);_c.y=1.3;
+          if(HRAY.distanceSqToPoint(_c)<0.62 && _c.sub(HRAY.origin).dot(HRAY.direction)>0) aimed=true;
+        }
+        gt.glow.scale.setScalar(aimed?1.35:1.0);
+        if(aimed&&btnDown(S.gunHand,0)){ gt.charge=0; gotoZone(gt.target); return; }
+        if(d<1.9||aimed){
+          gt.charge=Math.min(1,gt.charge+dt/(aimed?0.55:0.85));
           gt.light.intensity=1.6+gt.charge*4;
           if(gt.charge>=1){ gt.charge=0; gotoZone(gt.target); }
         }else{
@@ -1557,6 +1589,29 @@ function updateEShots(dt){
 }
 
 // ===================== képkocka =====================
+const _hm=new THREE.Matrix4(),_hs=new THREE.Vector3();
+// A renderer.xr.getCamera() kamerája NINCS a jelenetgráfban (nincs szülője),
+// ezért a világpozíciója figyelmen kívül hagyná a rig-et. A fejpózt közvetlenül
+// az XR képkockából vesszük, és a rig transzformációjával szorozzuk.
+function updateHead(frame){
+  if(frame&&S.renderer.xr.isPresenting){
+    const rs=S.renderer.xr.getReferenceSpace();
+    if(rs){
+      const pose=frame.getViewerPose(rs);
+      if(pose){
+        S.rig.updateMatrixWorld(true);
+        _hm.fromArray(pose.transform.matrix);
+        _hm.premultiply(S.rig.matrixWorld);
+        _hm.decompose(S.head,S.headQ,_hs);
+        return;
+      }
+    }
+  }
+  S.camera.updateMatrixWorld(true);
+  S.camera.getWorldPosition(S.head);
+  S.camera.getWorldQuaternion(S.headQ);
+}
+
 let fpsAcc=0,fpsN=0;
 function tick(time,frame){
   const raw=Math.min(S.clock.getDelta(),0.05);
@@ -1567,9 +1622,7 @@ function tick(time,frame){
   fpsAcc+=raw;fpsN++;
   if(fpsAcc>0.5){S.stats.fps=Math.round(fpsN/fpsAcc);fpsAcc=0;fpsN=0;}
 
-  const cam=S.renderer.xr.isPresenting?S.renderer.xr.getCamera():S.camera;
-  cam.getWorldPosition(S.head);
-  cam.getWorldQuaternion(S.headQ);
+  updateHead(frame);
   S.fwdFlat.set(0,0,-1).applyQuaternion(S.headQ);
   S.fwdFlat.y*=0.25;
   if(S.fwdFlat.lengthSq()<1e-6)S.fwdFlat.set(0,0,-1);
@@ -1612,7 +1665,7 @@ function tick(time,frame){
     S.camera.lookAt(0,1.3,0);
   }
 
-  listener(cam);
+  listener();
   S.renderer.info.reset();
   S.renderer.render(S.scene,S.camera);
   S.stats.calls=S.renderer.info.render.calls;
